@@ -12,8 +12,8 @@ using Nocturne.Render.Pipeline;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage;
 using Windows.Storage.Pickers;
-using Windows.UI.Core;
 using Windows.System;
+using Windows.UI.Core;
 using WinRT;
 using WinRT.Interop;
 
