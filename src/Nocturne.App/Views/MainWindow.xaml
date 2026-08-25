@@ -1,0 +1,202 @@
+<Window
+    x:Class="Nocturne.App.Views.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <Grid x:Name="RootGrid" Background="{StaticResource WindowBackgroundBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!--
+          Title bar. The file name sits centred in mono, dim, at caption size —
+          it identifies what is playing without competing with it. The window
+          buttons stay native; only the drag region is ours.
+        -->
+        <Grid x:Name="TitleBarGrid" Grid.Row="0" Height="40">
+            <TextBlock
+                x:Name="TitleText"
+                Text="{x:Bind ViewModel.WindowTitle, Mode=OneWay}"
+                Style="{StaticResource TimecodeTextStyle}"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                TextTrimming="CharacterEllipsis"
+                MaxWidth="520" />
+        </Grid>
+
+        <!-- Video surface and everything laid over it. -->
+        <Grid Grid.Row="1" AllowDrop="True" DragOver="OnDragOver" Drop="OnDrop">
+
+            <!--
+              The composition surface libmpv draws into. Everything below this
+              element in the tree composes over it with real alpha, which is the
+              entire reason the pipeline presents into a composition swap chain
+              instead of a child window. See docs/RENDERING.md.
+            -->
+            <SwapChainPanel x:Name="VideoPanel" SizeChanged="OnVideoPanelSizeChanged" />
+
+            <!-- Empty state, shown until a file is open. -->
+            <StackPanel
+                x:Name="EmptyState"
+                Visibility="{x:Bind ViewModel.EmptyStateVisibility, Mode=OneWay}"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Spacing="16">
+                <TextBlock
+                    Text="Nocturne"
+                    FontFamily="{StaticResource DisplayFontFamily}"
+                    FontSize="44"
+                    FontWeight="ExtraBold"
+                    Foreground="{StaticResource TextPrimaryBrush}"
+                    HorizontalAlignment="Center" />
+                <TextBlock
+                    Text="Drop a file here, or press Ctrl+O"
+                    FontFamily="{StaticResource UiFontFamily}"
+                    FontSize="{StaticResource TextSizeBody}"
+                    Foreground="{StaticResource TextMutedBrush}"
+                    HorizontalAlignment="Center" />
+            </StackPanel>
+
+            <!-- Failure state, replacing the picture rather than covering it. -->
+            <Border
+                Visibility="{x:Bind ViewModel.ErrorVisibility, Mode=OneWay}"
+                Style="{StaticResource OverlayChipStyle}"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                MaxWidth="560"
+                Padding="20,16">
+                <StackPanel Spacing="6">
+                    <TextBlock
+                        Text="This file would not play"
+                        FontFamily="{StaticResource UiFontFamily}"
+                        FontSize="{StaticResource TextSizeSubtitle}"
+                        Foreground="{StaticResource TextPrimaryBrush}" />
+                    <TextBlock
+                        Text="{x:Bind ViewModel.ErrorMessage, Mode=OneWay}"
+                        FontFamily="{StaticResource UiFontFamily}"
+                        FontSize="{StaticResource TextSizeCaption}"
+                        Foreground="{StaticResource TextMutedBrush}"
+                        TextWrapping="Wrap" />
+                </StackPanel>
+            </Border>
+
+            <!--
+              The file-name pill, bottom-left above the transport. Matches the
+              overlay chip in the source design: mono, translucent, bordered.
+            -->
+            <Border
+                Style="{StaticResource OverlayChipStyle}"
+                Visibility="{x:Bind ViewModel.TransportVisibility, Mode=OneWay}"
+                HorizontalAlignment="Left"
+                VerticalAlignment="Bottom"
+                Margin="24,0,0,116">
+                <TextBlock
+                    Style="{StaticResource TimecodeTextStyle}"
+                    Foreground="{StaticResource TextPrimaryBrush}"
+                    Text="{x:Bind ViewModel.OverlayChipText, Mode=OneWay}"
+                    TextTrimming="CharacterEllipsis"
+                    MaxWidth="480" />
+            </Border>
+
+            <!--
+              Transport bar. Sits on a gradient scrim rather than a filled strip
+              so it stays legible over a bright scene without laying a visible
+              band across a dark one.
+            -->
+            <Grid
+                x:Name="TransportBar"
+                Visibility="{x:Bind ViewModel.TransportVisibility, Mode=OneWay}"
+                VerticalAlignment="Bottom"
+                Background="{StaticResource TransportScrimBrush}"
+                Padding="24,32,24,16">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <Slider
+                    x:Name="SeekBar"
+                    Grid.Row="0"
+                    Style="{StaticResource SeekBarStyle}"
+                    Value="{x:Bind ViewModel.Progress, Mode=OneWay}"
+                    IsEnabled="{x:Bind ViewModel.IsSeekable, Mode=OneWay}"
+                    ManipulationMode="None"
+                    PointerPressed="OnSeekBarPointerPressed"
+                    PointerReleased="OnSeekBarPointerReleased"
+                    ValueChanged="OnSeekBarValueChanged"
+                    AutomationProperties.Name="Seek" />
+
+                <Grid Grid.Row="1" Margin="0,10,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel
+                        Grid.Column="0"
+                        Orientation="Horizontal"
+                        VerticalAlignment="Center"
+                        Spacing="6">
+                        <Button
+                            Style="{StaticResource TransportButtonStyle}"
+                            Content="&#xE892;"
+                            Click="OnPreviousClick"
+                            AutomationProperties.Name="Previous" />
+                        <Button
+                            Style="{StaticResource PlayButtonStyle}"
+                            Content="{x:Bind ViewModel.PlayPauseGlyph, Mode=OneWay}"
+                            Click="OnPlayPauseClick"
+                            AutomationProperties.Name="{x:Bind ViewModel.PlayPauseLabel, Mode=OneWay}" />
+                        <Button
+                            Style="{StaticResource TransportButtonStyle}"
+                            Content="&#xE893;"
+                            Click="OnNextClick"
+                            AutomationProperties.Name="Next" />
+                        <Button
+                            Style="{StaticResource TransportButtonStyle}"
+                            Content="{x:Bind ViewModel.VolumeGlyph, Mode=OneWay}"
+                            Click="OnMuteClick"
+                            Margin="8,0,0,0"
+                            AutomationProperties.Name="Mute" />
+                        <Slider
+                            Width="88"
+                            Minimum="0"
+                            Maximum="100"
+                            Style="{StaticResource SeekBarStyle}"
+                            Value="{x:Bind ViewModel.Volume, Mode=OneWay}"
+                            ValueChanged="OnVolumeChanged"
+                            VerticalAlignment="Center"
+                            AutomationProperties.Name="Volume" />
+                    </StackPanel>
+
+                    <StackPanel
+                        Grid.Column="2"
+                        Orientation="Horizontal"
+                        VerticalAlignment="Center"
+                        Spacing="6">
+                        <TextBlock
+                            Style="{StaticResource TimecodeTextStyle}"
+                            Text="{x:Bind ViewModel.Timecode, Mode=OneWay}"
+                            VerticalAlignment="Center"
+                            Margin="0,0,10,0" />
+                        <Button
+                            Style="{StaticResource TransportButtonStyle}"
+                            Content="&#xED1E;"
+                            Click="OnSubtitlesClick"
+                            AutomationProperties.Name="Subtitles" />
+                        <Button
+                            Style="{StaticResource TransportButtonStyle}"
+                            Content="&#xE740;"
+                            Click="OnFullScreenClick"
+                            AutomationProperties.Name="Full screen" />
+                    </StackPanel>
+                </Grid>
+            </Grid>
+        </Grid>
+    </Grid>
+</Window>

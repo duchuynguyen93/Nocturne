@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>Nocturne.Engine</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!--
+      Deliberately platform-neutral. libmpv exists on every desktop OS, and the
+      declarations here name no Windows type, so this project compiles and is
+      analyzed on the authoring Mac. Only Nocturne.Render is Windows-bound.
+    -->
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!--
+      CA1401/CA2101 police P/Invoke visibility and marshalling defaults. Every
+      entry point here is private inside MpvNative and every string is passed as
+      explicit UTF-8 bytes, so the rules only produce noise on this file set.
+    -->
+    <!--
+      CA1720 objects to members called String, Double, and Int64. Those are the
+      exact spellings of mpv_format in client.h, and an interop mirror that
+      renames its members stops being checkable against the header it mirrors.
+    -->
+    <NoWarn>$(NoWarn);CA1401;CA1720</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Nocturne.Core\Nocturne.Core.csproj" />
+  </ItemGroup>
+
+</Project>

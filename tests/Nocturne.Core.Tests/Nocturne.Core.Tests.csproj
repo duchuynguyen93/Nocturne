@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>Nocturne.Core.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <!--
+      Core targets net8.0 to match the runtime the app ships against, but the
+      authoring machine and CI runners do not always carry that exact runtime.
+      Rolling the test host forward lets the same assemblies be exercised on a
+      newer runtime instead of forcing an SDK install per machine.
+    -->
+    <RollForward>Major</RollForward>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="coverlet.collector" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Nocturne.Core\Nocturne.Core.csproj" />
+    <!--
+      Nocturne.Engine targets net8.0 rather than net8.0-windows precisely so its
+      state machine can be exercised here, on any platform, without libmpv being
+      loadable. Only the P/Invoke surface needs a real library.
+    -->
+    <ProjectReference Include="..\..\src\Nocturne.Engine\Nocturne.Engine.csproj" />
+  </ItemGroup>
+
+</Project>

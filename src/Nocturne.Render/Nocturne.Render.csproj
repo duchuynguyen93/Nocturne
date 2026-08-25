@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows10.0.26100.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <RootNamespace>Nocturne.Render</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Platforms>x64;ARM64</Platforms>
+    <!--
+      Lets this Windows-targeted project restore and compile on the authoring
+      Mac. It cannot run there — every P/Invoke below needs real Windows — but
+      compiling means the interop signatures, analyzer rules, and nullability
+      are checked on every edit instead of only in CI.
+    -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <!--
+      The only Windows-bound project. It owns Direct3D, ANGLE, and the swap chain
+      that libmpv draws into. Nothing above it names a graphics type.
+    -->
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!--
+      CA1401 polices P/Invoke visibility; every entry point here is private to
+      its interop class. CA1707 objects to the EGL_ and GL_ constant spellings,
+      which must match the headers to stay checkable against them.
+    -->
+    <NoWarn>$(NoWarn);CA1401;CA1707</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Vortice.Direct3D11" />
+    <PackageReference Include="Vortice.DXGI" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Nocturne.Core\Nocturne.Core.csproj" />
+    <ProjectReference Include="..\Nocturne.Engine\Nocturne.Engine.csproj" />
+  </ItemGroup>
+
+</Project>

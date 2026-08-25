@@ -1,0 +1,65 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.26100.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <RootNamespace>Nocturne.App</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Platforms>x64;ARM64</Platforms>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <UseWinUI>true</UseWinUI>
+    <EnableMsixTooling>true</EnableMsixTooling>
+
+    <!--
+      Unpackaged. The app registers file associations through the installer
+      rather than an MSIX manifest, which is what lets it be the default handler
+      for a video file without going through the Store.
+    -->
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <SelfContained>true</SelfContained>
+
+    <!--
+      No ApplicationIcon yet. Pointing at an icon that does not exist fails the
+      build, and shipping a placeholder would leave the default .NET icon on the
+      taskbar looking deliberate. Tracked in PLAN.md, Milestone 4.
+    -->
+    <AssemblyName>Nocturne</AssemblyName>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" />
+    <PackageReference Include="CommunityToolkit.Mvvm" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Nocturne.Core\Nocturne.Core.csproj" />
+    <ProjectReference Include="..\Nocturne.Engine\Nocturne.Engine.csproj" />
+    <ProjectReference Include="..\Nocturne.Render\Nocturne.Render.csproj" />
+  </ItemGroup>
+
+  <!--
+    libmpv and the ANGLE pair are fetched by scripts/fetch-mpv.ps1 into native\,
+    which is git-ignored. They are copied beside the executable rather than
+    loaded from a subdirectory because the default DLL search path for a
+    self-contained app starts with the executable's own folder.
+  -->
+  <ItemGroup>
+    <None Include="..\..\native\win-$(Platform.ToLowerInvariant())\*.dll"
+          Condition="Exists('..\..\native\win-$(Platform.ToLowerInvariant())')">
+      <Link>%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="Design\*.xaml">
+      <Generator>MSBuild:Compile</Generator>
+    </None>
+  </ItemGroup>
+
+</Project>

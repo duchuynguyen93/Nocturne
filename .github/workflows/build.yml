@@ -1,0 +1,163 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Runs first and alone: Core and Engine are platform-neutral by design, so a
+  # failure here is a real logic failure rather than a Windows toolchain problem.
+  # Keeping it on Linux proves that neutrality has not quietly been lost.
+  portable-tests:
+    name: Portable tests (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Test
+        run: >-
+          dotnet test tests/Nocturne.Core.Tests/Nocturne.Core.Tests.csproj
+          -c Release --logger "trx;LogFileName=core-tests.trx"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: portable-test-results
+          path: "**/TestResults/*.trx"
+          retention-days: 7
+
+  windows-build:
+    name: Windows ${{ matrix.platform }}
+    runs-on: windows-latest
+    timeout-minutes: 40
+    needs: portable-tests
+
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [x64]
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Show toolchain
+        shell: pwsh
+        run: dotnet --info
+
+      # libmpv only. ANGLE is not distributed with mpv and is not fetched here;
+      # the published build therefore compiles and launches but reports a render
+      # initialization failure until libEGL.dll and libGLESv2.dll are placed
+      # beside the executable. See docs/RENDERING.md, Risk 1.
+      - name: Fetch native runtime
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          ./scripts/fetch-mpv.ps1 -Architecture ${{ matrix.platform }}
+          # Exit code 2 means ANGLE is still missing, which is expected here.
+          if ($LASTEXITCODE -notin @(0, 2)) { exit $LASTEXITCODE }
+          exit 0
+
+      - name: Restore
+        shell: pwsh
+        run: dotnet restore Nocturne.sln -p:Platform=${{ matrix.platform }}
+
+      - name: Build
+        shell: pwsh
+        run: >-
+          dotnet build Nocturne.sln -c Release
+          -p:Platform=${{ matrix.platform }} --no-restore
+
+      - name: Publish self-contained app
+        shell: pwsh
+        run: >-
+          dotnet publish src/Nocturne.App/Nocturne.App.csproj
+          -c Release
+          -p:Platform=${{ matrix.platform }}
+          -r win-${{ matrix.platform }}
+          --self-contained true
+          -o artifacts/publish/${{ matrix.platform }}
+
+      # The publish output does not pick up native\ through the csproj glob when
+      # RuntimeIdentifier changes the item evaluation order, so the copy is
+      # repeated here where the final layout is known.
+      - name: Stage native runtime beside the executable
+        shell: pwsh
+        run: |
+          $source = "native/win-${{ matrix.platform }}"
+          if (Test-Path $source) {
+            Copy-Item "$source/*.dll" "artifacts/publish/${{ matrix.platform }}/" -Force
+          }
+          Get-ChildItem "artifacts/publish/${{ matrix.platform }}" -Filter *.dll |
+            Where-Object { $_.Name -match 'mpv|EGL|GLES' } |
+            ForEach-Object { Write-Host "native: $($_.Name)" }
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            throw "Inno Setup 6 was not found at $iscc."
+          }
+
+          & $iscc /DAppPlatform=${{ matrix.platform }} installer\Nocturne.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC exited with $LASTEXITCODE." }
+
+      - name: Upload portable build
+        uses: actions/upload-artifact@v4
+        with:
+          name: nocturne-${{ matrix.platform }}-portable
+          path: artifacts/publish/${{ matrix.platform }}
+          retention-days: 14
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: nocturne-${{ matrix.platform }}-setup
+          path: artifacts/installer/*.exe
+          retention-days: 14
+
+  # Separate from the build so a formatting nit never stands between a change
+  # and a downloadable artifact.
+  formatting:
+    name: Formatting
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Verify formatting
+        shell: pwsh
+        run: dotnet format Nocturne.sln --verify-no-changes --severity error

@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>Nocturne.Core</RootNamespace>
+    <!--
+      Core is deliberately platform-neutral so it restores, builds, and tests on
+      the authoring macOS machine. Nothing here may reference WinUI, Win32, COM,
+      or libmpv. See docs/ARCHITECTURE.md.
+    -->
+    <EnableWindowsTargeting>false</EnableWindowsTargeting>
+  </PropertyGroup>
+
+</Project>
