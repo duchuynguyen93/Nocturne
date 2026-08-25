@@ -33,7 +33,6 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" />
-    <PackageReference Include="CommunityToolkit.Mvvm" />
   </ItemGroup>
 
   <ItemGroup>

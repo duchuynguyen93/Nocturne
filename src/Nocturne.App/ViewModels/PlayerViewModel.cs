@@ -1,4 +1,3 @@
-using CommunityToolkit.Mvvm.ComponentModel;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Nocturne.Core.Media;
@@ -28,7 +27,7 @@ namespace Nocturne.App.ViewModels;
 /// position updates for the duration of the gesture.
 /// </para>
 /// </remarks>
-public sealed partial class PlayerViewModel : ObservableObject, IDisposable
+public sealed class PlayerViewModel : ObservableBase, IDisposable
 {
     private readonly PlayerEngine _engine;
     private readonly DispatcherQueue _dispatcher;
@@ -39,46 +38,22 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
     /// </summary>
     private static readonly TimeSpan PreviousRestartThreshold = TimeSpan.FromSeconds(3);
 
-    [ObservableProperty]
     private string _windowTitle = "Nocturne";
 
-    // Named TimecodeText, not Timecode: the generated property would otherwise
-    // shadow the Nocturne.Core.Text.Timecode helper class inside this type, and
-    // every call to it would bind to a string instead.
-    [ObservableProperty]
+    // Named TimecodeText, not Timecode: a property called Timecode would shadow
+    // the Nocturne.Core.Text.Timecode helper class inside this type, and every
+    // call to it would resolve against a string instead.
     private string _timecodeText = "00:00 / --:--";
-
-    [ObservableProperty]
     private string _overlayChipText = string.Empty;
-
-    [ObservableProperty]
     private double _progress;
-
-    [ObservableProperty]
     private double _volume = 100;
-
-    [ObservableProperty]
     private bool _isSeekable;
-
-    [ObservableProperty]
     private string _playPauseGlyph = "";
-
-    [ObservableProperty]
     private string _playPauseLabel = "Play";
-
-    [ObservableProperty]
     private string _volumeGlyph = "";
-
-    [ObservableProperty]
     private string? _errorMessage;
-
-    [ObservableProperty]
     private Visibility _emptyStateVisibility = Visibility.Visible;
-
-    [ObservableProperty]
     private Visibility _transportVisibility = Visibility.Collapsed;
-
-    [ObservableProperty]
     private Visibility _errorVisibility = Visibility.Collapsed;
 
     private bool _isScrubbing;
@@ -97,6 +72,97 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
 
         _engine.SnapshotChanged += OnSnapshotChanged;
         _engine.ReachedEnd += OnReachedEnd;
+    }
+
+    /// <summary>Window and title-bar caption.</summary>
+    public string WindowTitle
+    {
+        get => _windowTitle;
+        private set => Set(ref _windowTitle, value);
+    }
+
+    /// <summary>Elapsed and total time, as one already-formatted pair.</summary>
+    public string TimecodeText
+    {
+        get => _timecodeText;
+        private set => Set(ref _timecodeText, value);
+    }
+
+    /// <summary>Text of the overlay pill above the transport bar.</summary>
+    public string OverlayChipText
+    {
+        get => _overlayChipText;
+        private set => Set(ref _overlayChipText, value);
+    }
+
+    /// <summary>Playback position as a fraction of the duration, 0–1.</summary>
+    public double Progress
+    {
+        get => _progress;
+        private set => Set(ref _progress, value);
+    }
+
+    /// <summary>Output volume, 0–100.</summary>
+    public double Volume
+    {
+        get => _volume;
+        private set => Set(ref _volume, value);
+    }
+
+    /// <summary>Whether the seek bar should accept input.</summary>
+    public bool IsSeekable
+    {
+        get => _isSeekable;
+        private set => Set(ref _isSeekable, value);
+    }
+
+    /// <summary>Segoe Fluent glyph for the play/pause button.</summary>
+    public string PlayPauseGlyph
+    {
+        get => _playPauseGlyph;
+        private set => Set(ref _playPauseGlyph, value);
+    }
+
+    /// <summary>Accessible name for the play/pause button.</summary>
+    public string PlayPauseLabel
+    {
+        get => _playPauseLabel;
+        private set => Set(ref _playPauseLabel, value);
+    }
+
+    /// <summary>Segoe Fluent glyph for the volume button.</summary>
+    public string VolumeGlyph
+    {
+        get => _volumeGlyph;
+        private set => Set(ref _volumeGlyph, value);
+    }
+
+    /// <summary>Why the current item failed, if it did.</summary>
+    public string? ErrorMessage
+    {
+        get => _errorMessage;
+        set => Set(ref _errorMessage, value);
+    }
+
+    /// <summary>Whether the "drop a file here" surface is shown.</summary>
+    public Visibility EmptyStateVisibility
+    {
+        get => _emptyStateVisibility;
+        set => Set(ref _emptyStateVisibility, value);
+    }
+
+    /// <summary>Whether the transport bar is shown.</summary>
+    public Visibility TransportVisibility
+    {
+        get => _transportVisibility;
+        private set => Set(ref _transportVisibility, value);
+    }
+
+    /// <summary>Whether the failure surface is shown.</summary>
+    public Visibility ErrorVisibility
+    {
+        get => _errorVisibility;
+        set => Set(ref _errorVisibility, value);
     }
 
     /// <summary>Opens a file, replacing the queue with its containing folder.</summary>

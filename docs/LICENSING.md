@@ -49,7 +49,6 @@ after. Retrofitting it means re-testing every format.
 | ANGLE | BSD 3-clause | permissive; see `RENDERING.md` for where to obtain it |
 | Windows App SDK | MIT | |
 | Vortice.Windows | MIT | Direct3D/DXGI bindings |
-| CommunityToolkit.Mvvm | MIT | |
 | Geist / Geist Mono | SIL OFL 1.1 | embeddable; keep the licence file alongside |
 | Cabinet Grotesk | Fontshare licence | free, but **read the terms before shipping** — it is not OFL |
 

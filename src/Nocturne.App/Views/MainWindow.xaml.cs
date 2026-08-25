@@ -19,7 +19,7 @@ namespace Nocturne.App.Views;
 /// <c>SwapChainPanel</c>, and translates input into view-model calls. It holds
 /// no playback state of its own.
 /// </remarks>
-public sealed partial class MainWindow : Window
+public sealed partial class MainWindow : Window, IDisposable
 {
     private PlayerEngine? _engine;
     private VideoRenderer? _renderer;
@@ -193,7 +193,11 @@ public sealed partial class MainWindow : Window
         try
         {
             IReadOnlyList<Windows.Storage.IStorageItem> items = await e.DataView.GetStorageItemsAsync();
-            if (items.FirstOrDefault() is Windows.Storage.StorageFile file)
+
+            // Indexed directly rather than through FirstOrDefault: this is an
+            // IReadOnlyList, so the LINQ path allocates an enumerator to reach
+            // an element that is one indexer away (CA1826).
+            if (items.Count > 0 && items[0] is Windows.Storage.StorageFile file)
             {
                 ViewModel.Open(file.Path);
             }
@@ -244,7 +248,18 @@ public sealed partial class MainWindow : Window
         AppWindow.SetPresenter(_isFullScreen ? AppWindowPresenterKind.FullScreen : AppWindowPresenterKind.Overlapped);
     }
 
-    private void OnClosed(object sender, WindowEventArgs args)
+    private void OnClosed(object sender, WindowEventArgs args) => Dispose();
+
+    /// <summary>
+    /// Releases the engine and the render pipeline.
+    /// </summary>
+    /// <remarks>
+    /// A <c>Window</c> is not normally disposable, but this one owns two native
+    /// resources whose lifetime has to end with the window. Closing is the only
+    /// caller; <see cref="Dispose"/> exists so that ownership is visible in the
+    /// type rather than implied by an event handler.
+    /// </remarks>
+    public void Dispose()
     {
         // Order matters: the renderer holds a libmpv render context that must be
         // freed before the handle it was created from.
