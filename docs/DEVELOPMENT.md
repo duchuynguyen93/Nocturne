@@ -95,12 +95,20 @@ correctness is obvious by inspection.
 1. **portable-tests** on Linux — runs first. Also proves `Core` and `Engine` have
    not quietly acquired a Windows dependency.
 2. **windows-build** — fetches libmpv, builds the solution, publishes a
-   self-contained x64 app, and builds the Inno Setup installer. Both are uploaded
-   as artifacts.
+   self-contained x64 app, builds the Inno Setup installer, and attaches both to
+   a rolling `build-latest` prerelease.
 3. **formatting** — `dotnet format --verify-no-changes`, kept in its own job so a
    formatting nit never stands between a change and a downloadable build.
 
-To get a build to test on Windows: open the run in the Actions tab and download
-`nocturne-x64-setup` (installer) or `nocturne-x64-portable` (unzip and run).
-Remember that without ANGLE beside the executable it will launch and report a
+To get a build to test on Windows, download it from the
+[`build-latest` release](../../releases/tag/build-latest): `Nocturne-*-setup.exe`
+for the installer, or the portable zip.
+
+Builds go to a release rather than to Actions artifacts on purpose. Artifact
+storage is a small quota shared across the whole account — 500 MB on the free
+plan — and a self-contained WinUI publish is large enough that a handful of runs
+exhausts it, at which point the upload step fails and takes the job red with it.
+Release assets do not draw on that quota and give a stable URL.
+
+Remember that without ANGLE beside the executable the app launches and reports a
 render failure — that is the expected state until Risk 1 is resolved.

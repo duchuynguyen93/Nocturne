@@ -32,24 +32,21 @@ jobs:
         with:
           global-json-file: global.json
 
+      # Results go to the step summary rather than to an uploaded artifact.
+      # Actions artifact storage is a small shared quota across the whole
+      # account, and a .trx file nobody downloads is not worth spending it on.
       - name: Test
-        run: >-
-          dotnet test tests/Nocturne.Core.Tests/Nocturne.Core.Tests.csproj
-          -c Release --logger "trx;LogFileName=core-tests.trx"
-
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: portable-test-results
-          path: "**/TestResults/*.trx"
-          retention-days: 7
+        run: dotnet test tests/Nocturne.Core.Tests/Nocturne.Core.Tests.csproj -c Release
 
   windows-build:
     name: Windows ${{ matrix.platform }}
     runs-on: windows-latest
     timeout-minutes: 40
     needs: portable-tests
+
+    # Needed to publish the rolling build release.
+    permissions:
+      contents: write
 
     strategy:
       fail-fast: false
@@ -128,19 +125,47 @@ jobs:
           & $iscc /DAppPlatform=${{ matrix.platform }} installer\Nocturne.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC exited with $LASTEXITCODE." }
 
-      - name: Upload portable build
-        uses: actions/upload-artifact@v4
-        with:
-          name: nocturne-${{ matrix.platform }}-portable
-          path: artifacts/publish/${{ matrix.platform }}
-          retention-days: 14
+      # Published to a rolling prerelease rather than as Actions artifacts.
+      # Release assets do not draw on the Actions artifact quota, they survive
+      # the artifact retention window, and they give a stable download URL
+      # instead of one buried in a run page.
+      - name: Package portable build
+        if: github.ref == 'refs/heads/main'
+        shell: pwsh
+        run: |
+          Compress-Archive `
+            -Path "artifacts/publish/${{ matrix.platform }}/*" `
+            -DestinationPath "artifacts/nocturne-${{ matrix.platform }}-portable.zip" `
+            -Force
 
-      - name: Upload installer
-        uses: actions/upload-artifact@v4
-        with:
-          name: nocturne-${{ matrix.platform }}-setup
-          path: artifacts/installer/*.exe
-          retention-days: 14
+      - name: Publish to the rolling build release
+        if: github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = 'build-latest'
+
+          # Recreate rather than update: a stale asset from a previous run under
+          # the same name is worse than no asset, because it looks current.
+          gh release delete $tag --repo ${{ github.repository }} --yes --cleanup-tag 2>$null
+
+          $notes = @"
+          Automatic build of ``$env:GITHUB_SHA``.
+
+          **This build cannot play anything yet.** ANGLE (``libEGL.dll``,
+          ``libGLESv2.dll``) is not distributed with libmpv and is not bundled
+          here, so the app launches and reports a render initialization failure.
+          See docs/RENDERING.md, Risk 1.
+          "@
+
+          gh release create $tag `
+            --repo ${{ github.repository }} `
+            --title "Latest build" `
+            --notes "$notes" `
+            --prerelease `
+            "artifacts/installer/*.exe" `
+            "artifacts/nocturne-${{ matrix.platform }}-portable.zip"
 
   # Separate from the build so a formatting nit never stands between a change
   # and a downloadable artifact.
