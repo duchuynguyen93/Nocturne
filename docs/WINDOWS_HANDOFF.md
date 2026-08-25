@@ -97,9 +97,11 @@ Then run and check, in this order. Each line is a distinct thing that can fail.
 - [ ] The window opens at all. A WinUI resource or binding error shows as a
   silent process exit; `App.OnUnhandledException` writes the exception to the
   debug output first.
-- [ ] `AngleContext.Create` succeeds. Failure names the EGL error. The likely
-  ones: `EGL_BAD_PARAMETER` from `eglGetPlatformDisplayEXT` means this ANGLE
-  build does not accept an external D3D11 device.
+- [ ] `eglCreateDeviceANGLE` succeeds. A null return means this ANGLE build does
+  not expose `EGL_ANGLE_device_creation_d3d11`, and there is no way to hand it
+  the app's own device — **Risk 1 realised**, stop here.
+- [ ] `eglGetPlatformDisplayEXT` succeeds on that device. Failure names the EGL
+  error.
 - [ ] `eglCreatePbufferFromClientBuffer` succeeds. Failure here means the build
   lacks `EGL_ANGLE_d3d_texture_client_buffer`, which is **Risk 1 realised** —
   stop and re-read `RENDERING.md` §4 before writing code.
@@ -147,11 +149,20 @@ Only after step 1 draws a frame.
 ## Step 3 — interface
 
 - [ ] Compare against `UI_SPEC.md` §3 at 100%, 150%, and 200% display scale.
-- [ ] Confirm timecodes do not jitter as they count. If they do,
-  `FontFeatures="tnum"` is not reaching the fallback font.
+- [ ] Confirm timecodes do not jitter as they count. WinUI has no `FontFeatures`
+  property, so fixed-width digits come only from the family in
+  `MonoFontFamily` — jitter means it fell through to a proportional fallback.
 - [ ] Confirm the seek thumb is absent at rest and appears on hover.
 - [ ] Drag the seek bar during playback: the thumb must follow the pointer and
-  must not snap back. That is what `BeginScrub`/`EndScrub` guard.
+  must not snap back. That is what `BeginScrub`/`EndScrub` guard, and they only
+  reach the app because the handlers are attached with `handledEventsToo` —
+  `Slider` marks those pointer events handled for its own drag.
+- [ ] Click the seek bar once, then let playback run for a minute without
+  touching anything. It must play normally. Continuous seeking here would mean
+  a commit path is reading `ValueChanged`, which fires for the engine's own
+  position updates too.
+- [ ] Press Ctrl+O with nothing playing, and again while a file is open.
+- [ ] Press Space before clicking anything at all, on a freshly opened window.
 - [ ] Tab through the transport with the keyboard. Every control has an
   `AutomationProperties.Name`; confirm focus is visible against video.
 - [ ] Space, Left, Right, F11, and Escape.
