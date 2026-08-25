@@ -61,6 +61,24 @@ this file is where that distinction is kept honest.
 
 ### Fixed
 
+- Four defects surfaced by the first Windows builds, none of which any amount of
+  cross-compilation on the authoring machine could have caught:
+  - `PlayerViewModel`'s generated `Timecode` property shadowed the
+    `Nocturne.Core.Text.Timecode` helper class inside its own type, so
+    `Timecode.FormatPair` resolved against a `string`. Renamed to `TimecodeText`.
+  - `TextBlock.FontFeatures` does not exist in WinUI — it is a WPF facility. The
+    `WMC9999 Object reference not set` that followed was downstream of it, not a
+    separate fault. Fixed-width digits already come from the monospace family.
+  - `[ObservableProperty]` on a field raises `MVVMTK0045` in WinUI 3: the
+    generated code is not AOT-compatible for WinRT marshalling. The documented
+    fix is a partial property, needing C# 13 and a .NET 9+ SDK. Raising the SDK
+    to save boilerplate on one thirteen-property view model — and keeping a
+    source generator that cannot be exercised on the authoring machine — was the
+    worse trade, so CommunityToolkit.Mvvm was dropped for a twenty-line
+    `ObservableBase`.
+  - `FirstOrDefault` on an `IReadOnlyList` (CA1826), and `MainWindow` owning two
+    native resources without being disposable (CA1001).
+
 - `Timecode.FromSeconds` threw `OverflowException` on an absurd duration. It
   clamped after constructing the `TimeSpan`, and `TimeSpan.FromSeconds` throws
   for magnitudes it cannot represent — so the clamp never got the chance to run.
@@ -78,16 +96,25 @@ On the authoring macOS machine, 2026-08-25:
   about runtime behaviour.
 - 67 tests pass.
 
+In CI on `windows-latest`, run `32820878154`:
+
+- The full solution builds with **0 warnings and 0 errors**, including the XAML
+  compiler pass over `MainWindow.xaml`, `Palette.xaml`, and `Controls.xaml`.
+- `dotnet publish` produces a self-contained x64 app, `libmpv-2.dll` is staged
+  beside it, and Inno Setup packages a 91 MB installer. Both are attached to the
+  rolling `build-latest` prerelease.
+
 ### Not verified
 
 Stated explicitly so no later reader assumes otherwise:
 
+- **The app has never been launched.** It compiles and packages; nobody has run
+  the executable. Everything that only fails at runtime — resource resolution,
+  `x:Bind` against a `Window` root, whether bindings assigned after
+  `InitializeComponent` update at all — is still ahead.
 - **No libmpv call has ever been made by this code.** Every P/Invoke in `Engine`
   and `Render` is unexecuted.
 - **No frame has been drawn.** The render pipeline has never run.
-- **`Nocturne.App` has never been built.** WinUI needs a Windows toolchain, so
-  the XAML has not been through the XAML compiler; binding errors, resource-key
-  typos, and `x:Bind` type mismatches are all still ahead.
 - The ANGLE dependency is unconfirmed. mpv removed its ANGLE backend in 0.37, so
   the binaries must be sourced separately, and whether an obtainable build
   exposes `EGL_ANGLE_d3d_texture_client_buffer` on an external D3D11 device is

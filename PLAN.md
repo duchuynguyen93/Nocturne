@@ -47,12 +47,15 @@ artifact.
 - [x] `Nocturne.Render` compiles off Windows via `EnableWindowsTargeting`.
 - [x] CI: Linux tests, Windows build, self-contained publish, Inno Setup
   installer, formatting check.
-- [ ] `Nocturne.App` compiles. **Never attempted** — needs a Windows toolchain.
-- [ ] CI produces a green Windows build.
+- [x] `Nocturne.App` compiles, XAML pass included, 0 warnings and 0 errors.
+- [x] CI produces a green Windows build and publishes an installer to the
+  rolling `build-latest` prerelease.
 - [ ] Application icon.
+- [ ] The app launches. Compiling and packaging is not launching.
 
 Acceptance: a fresh clone restores, builds, and tests on Windows, and the
-Actions run yields an installer.
+Actions run yields an installer. **Met except for launch**, which needs a
+Windows machine.
 
 ## Milestone 1 — The spike BLOCKED on ANGLE binaries
 

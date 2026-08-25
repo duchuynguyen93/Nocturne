@@ -27,11 +27,22 @@ Be precise about this, because most of the repository has never run.
   been made by this code.
 - The entire render pipeline. No frame has been drawn.
 
-**Never built anywhere:**
+**Verified in CI on `windows-latest` (run `32820878154`):**
 
-- `Nocturne.App`. WinUI 3 needs a Windows toolchain; the XAML has never been
-  through the XAML compiler, so binding errors, resource-key typos, and
-  `x:Bind` type mismatches are all still ahead.
+- The full solution, `Nocturne.App` included, builds with 0 warnings and 0
+  errors. The XAML compiler has been over every file, so resource-key typos and
+  `x:Bind` type mismatches at compile time are behind us.
+- `dotnet publish` produces a self-contained x64 app with `libmpv-2.dll` staged
+  beside it, and Inno Setup packages an installer.
+
+**Never launched:**
+
+- Nobody has run the executable. Everything that only fails at runtime is ahead:
+  resource resolution at load, whether `x:Bind` works against a `Window` root at
+  all, and whether bindings assigned after `InitializeComponent` ever update —
+  `MainWindow` assigns `ViewModel` after that call, and if the surface comes up
+  blank, calling `Bindings.Update()` at the end of the constructor is the first
+  thing to try.
 
 No claim is made that the app launches, plays a file, or draws anything.
 

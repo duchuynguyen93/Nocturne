@@ -70,7 +70,12 @@ this was written on, instead of only inside a running Windows app.
 | `Nocturne.Core` | yes | 67 tests pass locally and in CI |
 | `Nocturne.Engine` | yes | state machine tested; interop compiles, never called |
 | `Nocturne.Render` | yes | compiles clean; **never executed** |
-| `Nocturne.App` | yes | **never built** — needs a Windows toolchain |
+| `Nocturne.App` | yes | XAML compiles, CI publishes an installer; **never launched** |
+
+CI produces a signed-nothing, installable build on every push to `main` — see the
+[`build-latest` release](../../releases/tag/build-latest). That build does not
+play anything: ANGLE is not bundled, so it launches and reports a render
+initialization failure.
 
 Nothing in the Windows-only path has drawn a frame. The first task on a Windows
 machine is the spike in [`docs/WINDOWS_HANDOFF.md`](docs/WINDOWS_HANDOFF.md),
