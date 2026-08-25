@@ -105,11 +105,14 @@ to obtain the native runtime.
 
 ## Licensing
 
-Nocturne's own code and the libraries it links are under different terms, and
-the difference decides whether the result can be distributed. libmpv and FFmpeg
-can be built as LGPL or as GPL depending on which components are enabled, and
-the readily available Windows builds are GPL. Read
-[`docs/LICENSING.md`](docs/LICENSING.md) before publishing a binary.
+GPL-3.0-or-later — see [`LICENSE`](LICENSE).
+
+The Windows libmpv builds this links against are GPL, so distributing a binary
+carries GPL obligations regardless of what Nocturne's own code says. Licensing
+the project to match makes that alignment explicit rather than accidental. The
+consequence to be aware of: a closed-source or commercial release is foreclosed
+unless libmpv and FFmpeg are rebuilt as LGPL, which is not planned. Details in
+[`docs/LICENSING.md`](docs/LICENSING.md).
 
 ## Documentation
 

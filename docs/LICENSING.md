@@ -1,15 +1,26 @@
 # Licensing
 
-Read this before distributing a binary. The libraries Nocturne links decide what
-the result can be, and the readily available Windows builds are the restrictive
-ones.
+## Decision
 
-## The short version
+**Nocturne is GPL-3.0-or-later.** See [`LICENSE`](../LICENSE).
 
-The `libmpv-2.dll` that `scripts/fetch-mpv.ps1` downloads is almost certainly
-**GPL**. Shipping it means the whole application is distributed under GPL terms,
-including Nocturne's own source. That is fine for a personal build and fine for
-an open-source release. It is not fine for a closed-source or commercial one.
+The project is for personal use and, if it is ever published, a free
+open-source release. That makes GPL the natural choice rather than a
+constraint: the `libmpv-2.dll` that `scripts/fetch-mpv.ps1` downloads is a GPL
+build, so distributing a binary already means distributing under GPL terms.
+Choosing GPL-3.0 aligns the project's own licence with the obligation it
+already carries, and removes the LGPL build pipeline described below from the
+list of things that ever need doing.
+
+The rest of this document explains what that forecloses, so a later change of
+mind is made with the facts rather than against them.
+
+## What the dependency actually requires
+
+Shipping the GPL `libmpv-2.dll` means the whole application is distributed under
+GPL terms, including Nocturne's own source. That is fine for a personal build
+and fine for an open-source release. It is not fine for a closed-source or
+commercial one.
 
 ## Why
 
@@ -31,12 +42,13 @@ GPL FFmpeg, GPL mpv.
 | Intent | What is required |
 | --- | --- |
 | Personal use, not distributed | Nothing. Licence terms govern distribution. |
-| Open-source release under GPL-3.0 | Nothing beyond the usual notices. This is the natural fit. |
+| **Open-source release under GPL-3.0** | **The chosen path.** Nothing beyond the usual notices. |
 | Closed-source or commercial release | Build LGPL FFmpeg (no `--enable-gpl`, no x264/x265) and LGPL mpv (`--enable-lgpl`), link dynamically, and ship the LGPL notices and relink information. |
 
 The LGPL route is real work — a custom FFmpeg and mpv build pipeline, plus the
-loss of some decoders — and it must be decided before the codebase grows, not
-after. Retrofitting it means re-testing every format.
+loss of some decoders — and retrofitting it means re-testing every format. It is
+not planned. If it is ever wanted, it has to happen before the codebase grows
+much further, and it supersedes the decision at the top of this file.
 
 ## Component summary
 
@@ -63,6 +75,13 @@ alongside, and list them in a `THIRD_PARTY_NOTICES.md` before any release.
 
 ## Nocturne's own code
 
-Currently unlicensed, which means all rights reserved by default. Pick a licence
-before making the repository public. Given the GPL libmpv dependency, GPL-3.0 is
-the path of least resistance; anything else requires the LGPL build route above.
+GPL-3.0-or-later, in [`LICENSE`](../LICENSE).
+
+Two consequences worth knowing before the repository is ever made public:
+
+- Anyone who receives a binary is entitled to the corresponding source. Keeping
+  the repository public once binaries are distributed is the simplest way to
+  satisfy that.
+- Code cannot be taken from this project into a closed-source one later, by
+  anybody including its author, without relicensing — which requires every
+  contributor's agreement.

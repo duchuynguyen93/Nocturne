@@ -130,7 +130,9 @@ SDR and an HDR display.
 
 ## Milestone 6 — Distribution
 
-- [ ] Licence decision. See `docs/LICENSING.md` — this gates everything below.
+- [x] Licence decision: GPL-3.0-or-later, matching the GPL libmpv build the app
+  already ships. Personal use and a free open-source release are the intent, so
+  the LGPL rebuild pipeline is off the table.
 - [ ] `THIRD_PARTY_NOTICES.md`.
 - [ ] Code signing.
 - [ ] Update check, off by default.
@@ -139,9 +141,7 @@ SDR and an HDR display.
 ## Open questions
 
 1. **ANGLE.** Milestone 1's blocker. Everything downstream assumes it resolves.
-2. **Licence.** GPL is the path of least resistance and forecloses a commercial
-   release. Deciding late means re-testing every format against an LGPL build.
-3. **Library or no library.** The current answer is no, and the design leans on
+2. **Library or no library.** The current answer is no, and the design leans on
    it: the playlist is a folder listing. Reversing it later is a large change.
-4. **Plugins.** Lumen exposes a JavaScript surface. Designing one before the
+3. **Plugins.** Lumen exposes a JavaScript surface. Designing one before the
    app's own vocabulary is stable would fossilise the wrong one.
