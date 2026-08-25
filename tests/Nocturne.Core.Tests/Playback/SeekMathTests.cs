@@ -38,6 +38,19 @@ public sealed class SeekMathTests
     }
 
     [Fact]
+    public void A_negative_duration_is_treated_as_unknown_not_as_a_bound()
+    {
+        // Documents the contract rather than endorsing it: SeekMath deliberately
+        // does not police the value, so the reducer folds a negative duration to
+        // zero before it ever arrives here.
+        Assert.Equal(
+            TimeSpan.FromSeconds(40),
+            SeekMath.Step(TimeSpan.FromSeconds(30), SeekMath.DefaultStep, TimeSpan.FromSeconds(-5)));
+
+        Assert.Null(SeekMath.FromTrackFraction(0.5, TimeSpan.FromSeconds(-5)));
+    }
+
+    [Fact]
     public void An_item_shorter_than_the_end_guard_only_seeks_to_zero()
     {
         TimeSpan result = SeekMath.ClampToRange(TimeSpan.FromMilliseconds(100), TimeSpan.FromMilliseconds(120));

@@ -65,15 +65,28 @@ internal static unsafe class Egl
     internal const int EGL_PLATFORM_ANGLE_TYPE_D3D11_ANGLE = 0x3208;
 
     /// <summary>
-    /// Hands ANGLE a device the app created rather than letting it create one.
+    /// Platform selector naming an <c>EGLDeviceEXT</c> as the native display.
     /// </summary>
     /// <remarks>
-    /// Sharing one device is what removes cross-device synchronisation from the
-    /// per-frame path. With two devices every frame needs a shared handle and a
-    /// keyed mutex, and the fence wait lands squarely in the presentation
-    /// interval.
+    /// This — not an attribute in the attribute list — is how ANGLE is given a
+    /// device the app already owns. The device is wrapped with
+    /// <c>eglCreateDeviceANGLE</c> first, then passed here as the native
+    /// display. Sharing one device is what removes cross-device synchronisation
+    /// from the per-frame path: with two devices every frame needs a shared
+    /// handle and a keyed mutex, and that wait lands squarely inside the
+    /// presentation interval.
     /// </remarks>
-    internal const int EGL_PLATFORM_ANGLE_D3D11_DEVICE_ANGLE = 0x33A1;
+    internal const int EGL_PLATFORM_DEVICE_EXT = 0x313F;
+
+    /// <summary>
+    /// Device type naming a D3D11 device, for <c>eglCreateDeviceANGLE</c>.
+    /// </summary>
+    /// <remarks>
+    /// From <c>EGL_ANGLE_device_d3d</c>. It is a device-creation token and a
+    /// queryable device attribute — it is <em>not</em> a display attribute, and
+    /// passing it in a display attribute list does not hand ANGLE the device.
+    /// </remarks>
+    internal const int EGL_D3D11_DEVICE_ANGLE = 0x33A1;
 
     /// <summary>Client buffer type naming a D3D11 texture.</summary>
     internal const int EGL_D3D_TEXTURE_ANGLE = 0x33A3;
@@ -88,8 +101,32 @@ internal static unsafe class Egl
     [DllImport(EglLibrary, EntryPoint = "eglGetProcAddress")]
     internal static extern nint GetProcAddress(byte* procName);
 
+    /// <summary>
+    /// Builds a display for a platform-specific native display handle.
+    /// </summary>
+    /// <remarks>
+    /// The attribute list is <c>EGLint*</c> — 32-bit entries, even on x64. Only
+    /// the EGL 1.5 core <c>eglGetPlatformDisplay</c> takes pointer-sized
+    /// <c>EGLAttrib</c>. Writing a 64-bit array and casting it here would make
+    /// ANGLE read each pointer as two separate attributes.
+    /// </remarks>
     [DllImport(EglLibrary, EntryPoint = "eglGetPlatformDisplayEXT")]
     internal static extern nint GetPlatformDisplay(int platform, nint nativeDisplay, int* attributes);
+
+    /// <summary>
+    /// Wraps a Direct3D device as an <c>EGLDeviceEXT</c>.
+    /// </summary>
+    /// <remarks>
+    /// From <c>EGL_ANGLE_device_creation_d3d11</c>. This is the supported route
+    /// for handing ANGLE a device the app created; the resulting device is then
+    /// passed to <see cref="GetPlatformDisplay"/> under
+    /// <see cref="EGL_PLATFORM_DEVICE_EXT"/>.
+    /// </remarks>
+    [DllImport(EglLibrary, EntryPoint = "eglCreateDeviceANGLE")]
+    internal static extern nint CreateDeviceAngle(int deviceType, nint device, int* attributes);
+
+    [DllImport(EglLibrary, EntryPoint = "eglReleaseDeviceANGLE")]
+    internal static extern int ReleaseDeviceAngle(nint device);
 
     [DllImport(EglLibrary, EntryPoint = "eglInitialize")]
     internal static extern int Initialize(nint display, int* major, int* minor);

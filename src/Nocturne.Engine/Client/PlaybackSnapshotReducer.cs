@@ -95,9 +95,16 @@ public static class PlaybackSnapshotReducer
                 // next file opens.
                 : current with { Position = TimeSpan.Zero },
 
+            // A negative duration is meaningless, and a damaged container will
+            // report one. Folding it to zero routes it into the "unknown length"
+            // path that live streams already use; leaving it negative would make
+            // SeekMath treat the file as unbounded and let a seek run past the
+            // end, where libmpv reports end-of-file and the playlist advances.
             Properties.Duration => current with
             {
-                Duration = value is double duration ? Timecode.FromSeconds(duration) : TimeSpan.Zero,
+                Duration = value is double duration && duration > 0
+                    ? Timecode.FromSeconds(duration)
+                    : TimeSpan.Zero,
             },
 
             Properties.Paused => value is bool paused

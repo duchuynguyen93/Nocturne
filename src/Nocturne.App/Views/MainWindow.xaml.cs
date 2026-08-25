@@ -5,11 +5,17 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Nocturne.App.ViewModels;
+using Nocturne.Core.Media;
+using Nocturne.Core.Playback;
 using Nocturne.Engine.Client;
 using Nocturne.Render.Pipeline;
 using Windows.ApplicationModel.DataTransfer;
+using Windows.Storage;
+using Windows.Storage.Pickers;
+using Windows.UI.Core;
 using Windows.System;
 using WinRT;
+using WinRT.Interop;
 
 namespace Nocturne.App.Views;
 
@@ -40,8 +46,83 @@ public sealed partial class MainWindow : Window, IDisposable
         _engine = new PlayerEngine(EngineOptions.Default);
         ViewModel = new PlayerViewModel(_engine, DispatcherQueue);
 
-        RootGrid.KeyDown += OnKeyDown;
+        AttachSliderGestures();
+        AttachAccelerators();
         Closed += OnClosed;
+    }
+
+    /// <summary>
+    /// Attaches the pointer handlers the sliders would otherwise swallow.
+    /// </summary>
+    /// <remarks>
+    /// <c>Slider</c> has a class handler that marks <c>PointerPressed</c> and
+    /// <c>PointerReleased</c> as handled so it can capture the pointer for a
+    /// drag. A handler attached in XAML never runs for an already-handled
+    /// event, so the scrub suppression looked wired up and silently did nothing.
+    /// <c>AddHandler</c> with <c>handledEventsToo</c> is the only way to see them.
+    /// </remarks>
+    private void AttachSliderGestures()
+    {
+        SeekBar.AddHandler(UIElement.PointerPressedEvent,
+            new PointerEventHandler(OnSeekBarPointerPressed), handledEventsToo: true);
+        SeekBar.AddHandler(UIElement.PointerReleasedEvent,
+            new PointerEventHandler(OnSeekBarPointerReleased), handledEventsToo: true);
+
+        // A drag interrupted by an alt-tab or a cancelled touch never sends a
+        // release. Without these the suppression flag latches on and the seek
+        // bar stops following playback for the rest of the session.
+        SeekBar.AddHandler(UIElement.PointerCaptureLostEvent,
+            new PointerEventHandler(OnSeekBarPointerCancelled), handledEventsToo: true);
+        SeekBar.AddHandler(UIElement.PointerCanceledEvent,
+            new PointerEventHandler(OnSeekBarPointerCancelled), handledEventsToo: true);
+
+        SeekBar.KeyDown += OnSeekBarKeyDown;
+
+        VolumeSlider.AddHandler(UIElement.PointerPressedEvent,
+            new PointerEventHandler(OnVolumePointerPressed), handledEventsToo: true);
+        VolumeSlider.AddHandler(UIElement.PointerReleasedEvent,
+            new PointerEventHandler(OnVolumePointerReleased), handledEventsToo: true);
+        VolumeSlider.AddHandler(UIElement.PointerCaptureLostEvent,
+            new PointerEventHandler(OnVolumePointerReleased), handledEventsToo: true);
+    }
+
+    /// <summary>
+    /// Registers shortcuts as accelerators rather than as key-down handlers.
+    /// </summary>
+    /// <remarks>
+    /// <c>KeyDown</c> only fires when something inside the tree holds focus. At
+    /// startup the transport bar is collapsed and nothing focusable is left, so
+    /// every shortcut would be dead until the user clicked something — and once
+    /// they had clicked a transport button, Space would re-press that button
+    /// instead of toggling playback. Accelerators fire regardless of focus.
+    /// </remarks>
+    private void AttachAccelerators()
+    {
+        void Add(VirtualKey key, VirtualKeyModifiers modifiers, Action action)
+        {
+            var accelerator = new KeyboardAccelerator { Key = key, Modifiers = modifiers };
+            accelerator.Invoked += (_, args) =>
+            {
+                action();
+                args.Handled = true;
+            };
+            RootGrid.KeyboardAccelerators.Add(accelerator);
+        }
+
+        Add(VirtualKey.Space, VirtualKeyModifiers.None, () => ViewModel.TogglePlayPause());
+        Add(VirtualKey.Left, VirtualKeyModifiers.None, () => ViewModel.SeekBy(-SeekMath.DefaultStep));
+        Add(VirtualKey.Right, VirtualKeyModifiers.None, () => ViewModel.SeekBy(SeekMath.DefaultStep));
+        Add(VirtualKey.Left, VirtualKeyModifiers.Shift, () => ViewModel.SeekBy(-SeekMath.FineStep));
+        Add(VirtualKey.Right, VirtualKeyModifiers.Shift, () => ViewModel.SeekBy(SeekMath.FineStep));
+        Add(VirtualKey.F11, VirtualKeyModifiers.None, ToggleFullScreen);
+        Add(VirtualKey.Escape, VirtualKeyModifiers.None, () =>
+        {
+            if (_isFullScreen)
+            {
+                ToggleFullScreen();
+            }
+        });
+        Add(VirtualKey.O, VirtualKeyModifiers.Control, () => _ = OpenFileAsync());
     }
 
     /// <summary>State shown by the window.</summary>
@@ -60,6 +141,14 @@ public sealed partial class MainWindow : Window, IDisposable
     /// </remarks>
     private void ApplyTitleBarColors()
     {
+        if (!AppWindowTitleBar.IsCustomizationSupported())
+        {
+            // Older Windows 10 builds reject these setters outright, and this
+            // runs in the constructor — a throw here means the window never
+            // appears at all.
+            return;
+        }
+
         AppWindowTitleBar titleBar = AppWindow.TitleBar;
         titleBar.ButtonBackgroundColor = Microsoft.UI.Colors.Transparent;
         titleBar.ButtonInactiveBackgroundColor = Microsoft.UI.Colors.Transparent;
@@ -125,18 +214,12 @@ public sealed partial class MainWindow : Window, IDisposable
             _renderer?.Dispose();
             _renderer = null;
 
-            ViewModel.ErrorMessage = ex.Message;
-            ViewModel.ErrorVisibility = Visibility.Visible;
-            ViewModel.EmptyStateVisibility = Visibility.Collapsed;
+            ViewModel.ReportRenderFailure(ex.Message);
         }
     }
 
     private void OnRenderFailed(object? sender, Exception error) =>
-        DispatcherQueue.TryEnqueue(() =>
-        {
-            ViewModel.ErrorMessage = error.Message;
-            ViewModel.ErrorVisibility = Visibility.Visible;
-        });
+        DispatcherQueue.TryEnqueue(() => ViewModel.ReportRenderFailure(error.Message));
 
     private void OnPlayPauseClick(object sender, RoutedEventArgs e) => ViewModel.TogglePlayPause();
 
@@ -158,19 +241,61 @@ public sealed partial class MainWindow : Window, IDisposable
     private void OnSeekBarPointerReleased(object sender, PointerRoutedEventArgs e) =>
         ViewModel.EndScrub(SeekBar.Value);
 
-    private void OnSeekBarValueChanged(object sender, Microsoft.UI.Xaml.Controls.Primitives.RangeBaseValueChangedEventArgs e)
+    private void OnSeekBarPointerCancelled(object sender, PointerRoutedEventArgs e) =>
+        ViewModel.CancelScrub();
+
+    /// <summary>
+    /// Seeks with the arrow keys without letting the slider move itself.
+    /// </summary>
+    /// <remarks>
+    /// The commit deliberately does not go through <c>ValueChanged</c>.
+    /// <c>RangeBase.ValueChanged</c> fires for programmatic writes as well as
+    /// for gestures and carries nothing that separates them, so committing from
+    /// there turns every position update the engine publishes into a fresh
+    /// seek — a feedback loop that makes playback unwatchable the moment the
+    /// user touches the bar.
+    /// </remarks>
+    private void OnSeekBarKeyDown(object sender, KeyRoutedEventArgs e)
     {
-        // Keyboard and accessibility changes arrive without a pointer gesture, so
-        // they commit immediately rather than waiting for a release that will
-        // never come.
-        if (!SeekBar.FocusState.Equals(FocusState.Unfocused))
+        bool fine = InputKeyboardSource
+            .GetKeyStateForCurrentThread(VirtualKey.Shift)
+            .HasFlag(CoreVirtualKeyStates.Down);
+        TimeSpan step = fine ? SeekMath.FineStep : SeekMath.DefaultStep;
+
+        switch (e.Key)
         {
-            ViewModel.EndScrub(e.NewValue);
+            case VirtualKey.Left:
+                ViewModel.SeekBy(-step);
+                break;
+            case VirtualKey.Right:
+                ViewModel.SeekBy(step);
+                break;
+            case VirtualKey.Home:
+                ViewModel.SeekTo(TimeSpan.Zero);
+                break;
+            default:
+                return;
         }
+
+        e.Handled = true;
     }
 
-    private void OnVolumeChanged(object sender, Microsoft.UI.Xaml.Controls.Primitives.RangeBaseValueChangedEventArgs e) =>
-        ViewModel.SetVolume(e.NewValue);
+    private void OnVolumePointerPressed(object sender, PointerRoutedEventArgs e) =>
+        ViewModel.BeginVolumeAdjust();
+
+    private void OnVolumePointerReleased(object sender, PointerRoutedEventArgs e) =>
+        ViewModel.EndVolumeAdjust();
+
+    private void OnVolumeChanged(object sender, Microsoft.UI.Xaml.Controls.Primitives.RangeBaseValueChangedEventArgs e)
+    {
+        // Only a gesture commits. Outside one, this event is the binding writing
+        // the engine's own value back in, and forwarding that would fight the
+        // slider every time libmpv echoes a value.
+        if (ViewModel.IsAdjustingVolume)
+        {
+            ViewModel.SetVolume(e.NewValue);
+        }
+    }
 
     private void OnDragOver(object sender, DragEventArgs e)
     {
@@ -202,50 +327,66 @@ public sealed partial class MainWindow : Window, IDisposable
                 ViewModel.Open(file.Path);
             }
         }
+#pragma warning disable CA1031 // An async void handler must not let anything escape.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            // A virtual drag source — a file inside a zip, a mail attachment, an
+            // app that has since closed — throws here. This is async void, so an
+            // escaping exception reaches the unhandled handler and kills the
+            // process over a bad drop.
+            ViewModel.ErrorMessage = $"Could not read the dropped item: {ex.Message}";
+            ViewModel.ErrorVisibility = Visibility.Visible;
+        }
         finally
         {
             deferral.Complete();
         }
     }
 
-    private void OnKeyDown(object sender, KeyRoutedEventArgs e)
-    {
-        switch (e.Key)
-        {
-            case VirtualKey.Space:
-                ViewModel.TogglePlayPause();
-                e.Handled = true;
-                break;
-
-            case VirtualKey.Left:
-                ViewModel.SeekBy(-Nocturne.Core.Playback.SeekMath.DefaultStep);
-                e.Handled = true;
-                break;
-
-            case VirtualKey.Right:
-                ViewModel.SeekBy(Nocturne.Core.Playback.SeekMath.DefaultStep);
-                e.Handled = true;
-                break;
-
-            case VirtualKey.F11:
-                ToggleFullScreen();
-                e.Handled = true;
-                break;
-
-            case VirtualKey.Escape when _isFullScreen:
-                ToggleFullScreen();
-                e.Handled = true;
-                break;
-
-            default:
-                break;
-        }
-    }
-
     private void ToggleFullScreen()
     {
         _isFullScreen = !_isFullScreen;
+
+        // The title bar row has a fixed height and stays in the layout when the
+        // presenter changes, so without this a full-screen film keeps a 40px
+        // black band with a file name in it across the top.
+        TitleBarGrid.Visibility = _isFullScreen ? Visibility.Collapsed : Visibility.Visible;
+
         AppWindow.SetPresenter(_isFullScreen ? AppWindowPresenterKind.FullScreen : AppWindowPresenterKind.Overlapped);
+    }
+
+    /// <summary>Shows the file picker and opens what the user chose.</summary>
+    /// <remarks>
+    /// The app is unpackaged, so the picker has no window to parent itself to
+    /// and throws unless it is handed the window handle explicitly.
+    /// </remarks>
+    private async Task OpenFileAsync()
+    {
+        try
+        {
+            var picker = new FileOpenPicker();
+            InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(this));
+
+            // FileTypeFilter must not be empty or PickSingleFileAsync throws.
+            foreach (string extension in MediaFormats.VideoExtensions.Concat(MediaFormats.AudioExtensions))
+            {
+                picker.FileTypeFilter.Add(extension);
+            }
+
+            StorageFile? file = await picker.PickSingleFileAsync();
+            if (file is not null)
+            {
+                ViewModel.Open(file.Path);
+            }
+        }
+#pragma warning disable CA1031 // The picker is an OS surface; it must not crash the app.
+        catch (Exception ex)
+#pragma warning restore CA1031
+        {
+            ViewModel.ErrorMessage = $"Could not open the file picker: {ex.Message}";
+            ViewModel.ErrorVisibility = Visibility.Visible;
+        }
     }
 
     private void OnClosed(object sender, WindowEventArgs args) => Dispose();

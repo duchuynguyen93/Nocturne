@@ -106,6 +106,12 @@ public sealed unsafe class VideoRenderer : IDisposable
             key = _nextInstanceKey++;
         }
 
+        // SetDllImportResolver is scoped to one assembly. MpvRenderNative lives
+        // here, not in Nocturne.Engine, so without this registration every
+        // P/Invoke below probes for a bare "mpv.dll" — a file that exists in no
+        // libmpv distribution — and throws on the first render call.
+        MpvRuntime.RegisterInteropAssembly(typeof(VideoRenderer).Assembly);
+
         var renderer = new VideoRenderer(key);
         try
         {
@@ -290,10 +296,13 @@ public sealed unsafe class VideoRenderer : IDisposable
 
         _renderTexture = _device.CreateTexture2D(description);
 
+        // No EGL_WIDTH/EGL_HEIGHT here. With buftype EGL_D3D_TEXTURE_ANGLE the
+        // size comes from the texture itself, and some ANGLE builds reject those
+        // two attributes with EGL_BAD_ATTRIBUTE. They belong to
+        // EGL_D3D_TEXTURE_2D_SHARE_HANDLE_ANGLE, where the size cannot be
+        // queried from the handle.
         int* surfaceAttributes = stackalloc int[]
         {
-            Egl.EGL_WIDTH, width,
-            Egl.EGL_HEIGHT, height,
             Egl.EGL_TEXTURE_FORMAT, Egl.EGL_TEXTURE_RGBA,
             Egl.EGL_TEXTURE_TARGET, Egl.EGL_TEXTURE_2D,
             Egl.EGL_NONE,
@@ -532,7 +541,17 @@ public sealed unsafe class VideoRenderer : IDisposable
             Instances.TryGetValue(callbackContext, out renderer);
         }
 
-        renderer?._frameAvailable.Set();
+        try
+        {
+            renderer?._frameAvailable.Set();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Disposal can complete between the lookup above and this line. An
+            // exception escaping an [UnmanagedCallersOnly] method fails the
+            // whole process fast, so a missed wake-up on a renderer that is
+            // going away is swallowed on purpose.
+        }
     }
 
     /// <summary>
@@ -575,19 +594,51 @@ public sealed unsafe class VideoRenderer : IDisposable
         _cancellation.Cancel();
         _frameAvailable.Set();
 
-        if (_renderThread.IsAlive && !_renderThread.Join(TimeSpan.FromSeconds(2)))
+        bool threadStopped = !_renderThread.IsAlive || _renderThread.Join(TimeSpan.FromSeconds(2));
+        if (!threadStopped)
         {
-            // Background thread; a timeout cannot keep the process alive, and
-            // forcing teardown of GPU resources under it would be worse.
+            // The render thread is wedged — stuck in Present behind a hung
+            // driver, or mid-frame on something very large. Everything below
+            // frees handles that thread is still using, so it is skipped: this
+            // leaks a device and a render context for the remaining life of the
+            // process, which is strictly better than a use-after-free inside the
+            // GPU driver with no usable stack. The comment used to claim this
+            // and the code did the opposite.
             RenderFailed?.Invoke(
                 this,
-                new TimeoutException("The video render thread did not stop within two seconds."));
+                new TimeoutException(
+                    "The video render thread did not stop within two seconds; " +
+                    "GPU resources were deliberately leaked rather than freed underneath it."));
+            return;
         }
 
         if (_renderContext != nint.Zero)
         {
+            // render.h requires the GL context to be current for
+            // mpv_render_context_free — it destroys the shaders, FBOs and
+            // texture cache it created. The render thread cleared the context on
+            // its way out, so it has to be made current again here, on the
+            // thread that is about to call free.
+            bool contextCurrent = false;
+            try
+            {
+                _angle.MakeCurrent(_eglSurface);
+                contextCurrent = true;
+            }
+#pragma warning disable CA1031 // Teardown must continue whatever happens here.
+            catch (Exception ex)
+#pragma warning restore CA1031
+            {
+                RenderFailed?.Invoke(this, ex);
+            }
+
             MpvRenderNative.ContextFree(_renderContext);
             _renderContext = nint.Zero;
+
+            if (contextCurrent)
+            {
+                _angle.ClearCurrent();
+            }
         }
 
         if (_eglSurface != Egl.EGL_NO_SURFACE && _angle is not null)

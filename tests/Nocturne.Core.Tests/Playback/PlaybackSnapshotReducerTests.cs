@@ -55,6 +55,23 @@ public sealed class PlaybackSnapshotReducerTests
         Assert.Equal(TimeSpan.Zero, next.Position);
     }
 
+    [Theory]
+    [InlineData(-1.0)]
+    [InlineData(-3600.0)]
+    public void A_negative_duration_is_folded_into_the_unknown_length_path(double reported)
+    {
+        // A damaged container reports one of these. Left negative, SeekMath
+        // would treat the file as unbounded and let a seek run past the end,
+        // where libmpv raises end-of-file and the playlist advances.
+        PlaybackSnapshot current = Playing(TimeSpan.Zero, TimeSpan.FromMinutes(4));
+
+        PlaybackSnapshot next = PlaybackSnapshotReducer.Apply(current, Props.Duration, reported);
+
+        Assert.Equal(TimeSpan.Zero, next.Duration);
+        Assert.False(next.IsSeekable);
+        Assert.Equal(0.0, next.Progress);
+    }
+
     [Fact]
     public void A_pause_change_while_opening_does_not_promote_the_status()
     {

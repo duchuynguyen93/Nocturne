@@ -57,6 +57,7 @@ public sealed class PlayerViewModel : ObservableBase, IDisposable
     private Visibility _errorVisibility = Visibility.Collapsed;
 
     private bool _isScrubbing;
+    private string? _renderFailure;
     private bool _disposed;
 
     /// <summary>Creates the view model over an engine.</summary>
@@ -210,7 +211,15 @@ public sealed class PlayerViewModel : ObservableBase, IDisposable
     /// <summary>Steps the playhead by a relative amount.</summary>
     public void SeekBy(TimeSpan step) => _engine.SeekBy(step);
 
+    /// <summary>Seeks to an absolute position.</summary>
+    public void SeekTo(TimeSpan position) => _engine.SeekTo(position);
+
     /// <summary>Suppresses incoming position updates while the user drags.</summary>
+    /// <remarks>
+    /// Without this, a drag fights the engine: the user moves the thumb, the
+    /// engine reports the old position a few milliseconds later, the binding
+    /// writes it back, and the thumb snaps backwards under the pointer.
+    /// </remarks>
     public void BeginScrub() => _isScrubbing = true;
 
     /// <summary>Commits a scrub gesture and resumes following the engine.</summary>
@@ -224,11 +233,62 @@ public sealed class PlayerViewModel : ObservableBase, IDisposable
         }
     }
 
+    /// <summary>Abandons a scrub gesture without seeking.</summary>
+    /// <remarks>
+    /// Needed for pointer capture loss — a drag interrupted by an alt-tab or a
+    /// touch cancellation never sends a release, and leaving
+    /// <c>_isScrubbing</c> latched would freeze the seek bar for good.
+    /// </remarks>
+    public void CancelScrub()
+    {
+        _isScrubbing = false;
+        Progress = _engine.Snapshot.Progress;
+    }
+
+    /// <summary>
+    /// Whether the user is currently working the volume slider.
+    /// </summary>
+    /// <remarks>
+    /// The volume slider has the same feedback problem as the seek bar, for the
+    /// same reason: libmpv echoes the previous value back a moment later. The
+    /// window also uses this to tell a user-driven change from the binding
+    /// writing a value in — <c>ValueChanged</c> fires for both and carries
+    /// nothing that distinguishes them.
+    /// </remarks>
+    public bool IsAdjustingVolume { get; private set; }
+
+    /// <summary>Starts a volume gesture.</summary>
+    public void BeginVolumeAdjust() => IsAdjustingVolume = true;
+
+    /// <summary>Ends a volume gesture.</summary>
+    public void EndVolumeAdjust()
+    {
+        IsAdjustingVolume = false;
+        Volume = _engine.Snapshot.Volume;
+    }
+
     /// <summary>Sets output volume, 0–100.</summary>
     public void SetVolume(double volume) => _engine.SetVolume(volume);
 
     /// <summary>Toggles mute without changing the volume.</summary>
     public void ToggleMute() => _engine.SetMuted(!_engine.Snapshot.IsMuted);
+
+    /// <summary>
+    /// Records that the video pipeline could not be built, permanently.
+    /// </summary>
+    /// <remarks>
+    /// Latched rather than shown once: nothing that happens later makes a
+    /// missing GPU path work again, and ordinary playback snapshots would
+    /// otherwise clear the message within milliseconds.
+    /// </remarks>
+    public void ReportRenderFailure(string message)
+    {
+        _renderFailure = message;
+        ErrorMessage = message;
+        ErrorVisibility = Visibility.Visible;
+        EmptyStateVisibility = Visibility.Collapsed;
+        TransportVisibility = Visibility.Collapsed;
+    }
 
     /// <inheritdoc />
     public void Dispose()
@@ -262,7 +322,18 @@ public sealed class PlayerViewModel : ObservableBase, IDisposable
             int index = siblings.FindIndex(
                 candidate => string.Equals(candidate, path, StringComparison.OrdinalIgnoreCase));
 
-            _playlist.Load(siblings.Count == 0 ? [path] : siblings, Math.Max(index, 0));
+            if (index < 0)
+            {
+                // The file is playing but its extension is not in MediaFormats —
+                // an .iso, or something opened from the command line. Inserting
+                // it keeps the queue's idea of "current" in step with what the
+                // engine is actually playing; falling back to index 0 would make
+                // Next jump from the wrong place.
+                siblings.Insert(0, path);
+                index = 0;
+            }
+
+            _playlist.Load(siblings, index);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -275,12 +346,20 @@ public sealed class PlayerViewModel : ObservableBase, IDisposable
 
     private void OnReachedEnd(object? sender, EventArgs e)
     {
-        // Deliberately not user-initiated, so repeat-one replays rather than
-        // advancing.
-        if (_playlist.MoveNext() is { } next)
+        // The whole handler hops to the UI thread, not just the Open call. This
+        // runs on the engine's pump thread, and the playlist is mutated from the
+        // UI thread by Next, Previous, and Open. Advancing here would race a
+        // user pressing Next as the file ends — which is exactly when people
+        // press it — and could skip two items or tear a list mid-rebuild.
+        _dispatcher.TryEnqueue(() =>
         {
-            _dispatcher.TryEnqueue(() => _engine.Open(next));
-        }
+            // Deliberately not user-initiated, so repeat-one replays rather than
+            // advancing.
+            if (_playlist.MoveNext() is { } next)
+            {
+                _engine.Open(next);
+            }
+        });
     }
 
     private void OnSnapshotChanged(object? sender, PlaybackSnapshot snapshot)
@@ -301,7 +380,11 @@ public sealed class PlayerViewModel : ObservableBase, IDisposable
         }
 
         IsSeekable = snapshot.IsSeekable;
-        Volume = snapshot.Volume;
+
+        if (!IsAdjustingVolume)
+        {
+            Volume = snapshot.Volume;
+        }
 
         bool playing = snapshot.Status == PlaybackStatus.Playing;
         PlayPauseGlyph = playing ? "" : "";
@@ -316,6 +399,21 @@ public sealed class PlayerViewModel : ObservableBase, IDisposable
         string label = ResolveDisplayName(snapshot);
         WindowTitle = string.IsNullOrEmpty(label) ? "Nocturne" : $"{label} — Nocturne";
         OverlayChipText = string.IsNullOrEmpty(label) ? string.Empty : $"{label} · {position} / {duration}";
+
+        // A render pipeline that failed to build stays on screen. It is a fault
+        // of the app, not of the current file, and the engine keeps publishing
+        // ordinary snapshots afterwards — letting those overwrite the message
+        // would flash the one diagnostic the user needs and then hide it. On a
+        // machine with no ANGLE, which today means every machine, that reads as
+        // "the app opened and did nothing".
+        if (_renderFailure is not null)
+        {
+            ErrorMessage = _renderFailure;
+            ErrorVisibility = Visibility.Visible;
+            EmptyStateVisibility = Visibility.Collapsed;
+            TransportVisibility = Visibility.Collapsed;
+            return;
+        }
 
         ErrorMessage = snapshot.ErrorMessage;
         ErrorVisibility = snapshot.Status == PlaybackStatus.Failed ? Visibility.Visible : Visibility.Collapsed;

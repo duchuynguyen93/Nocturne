@@ -49,7 +49,10 @@ internal struct MpvEventEndFile
     public MpvEndFileReason Reason;
     public int Error;
     public long PlaylistEntryId;
-    public int PlaylistInsertId;
+
+    // int64_t in client.h, not int. Declaring it as int shifts every field after
+    // it, so PlaylistInsertNumEntries would read the high half of this value.
+    public long PlaylistInsertId;
     public int PlaylistInsertNumEntries;
 }
 

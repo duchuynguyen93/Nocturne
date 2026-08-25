@@ -19,13 +19,15 @@ internal sealed unsafe class AngleContext : IDisposable
     private nint _display;
     private nint _config;
     private nint _context;
+    private nint _device;
     private bool _disposed;
 
-    private AngleContext(nint display, nint config, nint context)
+    private AngleContext(nint display, nint config, nint context, nint device)
     {
         _display = display;
         _config = config;
         _context = context;
+        _device = device;
     }
 
     /// <summary>The EGL display, needed when creating surfaces.</summary>
@@ -42,31 +44,37 @@ internal sealed unsafe class AngleContext : IDisposable
     {
         ArgumentNullException.ThrowIfNull(device);
 
-        int* displayAttributes = stackalloc int[]
-        {
-            Egl.EGL_PLATFORM_ANGLE_TYPE_ANGLE, Egl.EGL_PLATFORM_ANGLE_TYPE_D3D11_ANGLE,
-            Egl.EGL_PLATFORM_ANGLE_D3D11_DEVICE_ANGLE, (int)device.NativePointer,
-            Egl.EGL_NONE,
-        };
+        // Step one: wrap the app's D3D11 device as an EGLDeviceEXT.
+        //
+        // There is no display attribute that accepts a raw ID3D11Device*. An
+        // earlier version of this code put EGL_D3D11_DEVICE_ANGLE into the
+        // attribute list, which is a device-creation token, not a display
+        // attribute — at best ANGLE ignored it and silently created a second
+        // device of its own, which breaks the single-device invariant the whole
+        // pipeline rests on (see docs/RENDERING.md §2) and makes the pbuffer
+        // wrap in VideoRenderer fail because the texture belongs elsewhere.
+        nint eglDevice = Egl.CreateDeviceAngle(
+            Egl.EGL_D3D11_DEVICE_ANGLE,
+            device.NativePointer,
+            null);
 
-        // The attribute array carries a pointer in an int slot on purpose: the
-        // EGL attribute type is intptr-sized (EGLAttrib) for this entry point,
-        // so the value must be written as a native-sized word, not truncated.
-        nint* wideAttributes = stackalloc nint[]
+        if (eglDevice == nint.Zero)
         {
-            Egl.EGL_PLATFORM_ANGLE_TYPE_ANGLE, Egl.EGL_PLATFORM_ANGLE_TYPE_D3D11_ANGLE,
-            Egl.EGL_PLATFORM_ANGLE_D3D11_DEVICE_ANGLE, device.NativePointer,
-            Egl.EGL_NONE,
-        };
-        _ = displayAttributes;
+            throw new RenderInitializationException(
+                "eglCreateDeviceANGLE failed. This ANGLE build does not expose " +
+                $"EGL_ANGLE_device_creation_d3d11: {Egl.DescribeLastError()}.");
+        }
 
+        // Step two: build the display on that device. The attribute list here is
+        // EGLint-sized; see the declaration of GetPlatformDisplay.
         nint display = Egl.GetPlatformDisplay(
-            Egl.EGL_PLATFORM_ANGLE_ANGLE,
-            Egl.EGL_DEFAULT_DISPLAY,
-            (int*)wideAttributes);
+            Egl.EGL_PLATFORM_DEVICE_EXT,
+            eglDevice,
+            null);
 
         if (display == Egl.EGL_NO_DISPLAY)
         {
+            _ = Egl.ReleaseDeviceAngle(eglDevice);
             throw new RenderInitializationException(
                 "eglGetPlatformDisplayEXT failed. ANGLE's libEGL.dll is present but would not " +
                 $"build a display on the app's D3D11 device: {Egl.DescribeLastError()}.");
@@ -76,6 +84,7 @@ internal sealed unsafe class AngleContext : IDisposable
         int minor = 0;
         if (Egl.Initialize(display, &major, &minor) == Egl.EGL_FALSE)
         {
+            _ = Egl.ReleaseDeviceAngle(eglDevice);
             throw new RenderInitializationException(
                 $"eglInitialize failed: {Egl.DescribeLastError()}.");
         }
@@ -104,6 +113,7 @@ internal sealed unsafe class AngleContext : IDisposable
             || configCount == 0)
         {
             _ = Egl.Terminate(display);
+            _ = Egl.ReleaseDeviceAngle(eglDevice);
             throw new RenderInitializationException(
                 $"eglChooseConfig found no ES3 pbuffer config: {Egl.DescribeLastError()}.");
         }
@@ -118,11 +128,12 @@ internal sealed unsafe class AngleContext : IDisposable
         if (context == Egl.EGL_NO_CONTEXT)
         {
             _ = Egl.Terminate(display);
+            _ = Egl.ReleaseDeviceAngle(eglDevice);
             throw new RenderInitializationException(
                 $"eglCreateContext failed for OpenGL ES 3: {Egl.DescribeLastError()}.");
         }
 
-        return new AngleContext(display, config, context);
+        return new AngleContext(display, config, context, eglDevice);
     }
 
     /// <summary>Makes this context current on the calling thread.</summary>
@@ -191,6 +202,14 @@ internal sealed unsafe class AngleContext : IDisposable
         _ = Egl.Terminate(_display);
         _display = Egl.EGL_NO_DISPLAY;
         _config = nint.Zero;
+
+        // After the display, never before: terminating a display whose device
+        // has already been released is undefined.
+        if (_device != nint.Zero)
+        {
+            _ = Egl.ReleaseDeviceAngle(_device);
+            _device = nint.Zero;
+        }
     }
 }
 

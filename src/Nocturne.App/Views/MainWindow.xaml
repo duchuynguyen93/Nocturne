@@ -118,6 +118,13 @@
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
+                <!--
+                    No PointerPressed/PointerReleased handlers here: Slider's own
+                    class handler marks both as handled to capture the pointer for
+                    a drag, and a handler attached this way is skipped for an
+                    already-handled event. They are attached in code-behind with
+                    handledEventsToo instead.
+                -->
                 <Slider
                     x:Name="SeekBar"
                     Grid.Row="0"
@@ -125,9 +132,6 @@
                     Value="{x:Bind ViewModel.Progress, Mode=OneWay}"
                     IsEnabled="{x:Bind ViewModel.IsSeekable, Mode=OneWay}"
                     ManipulationMode="None"
-                    PointerPressed="OnSeekBarPointerPressed"
-                    PointerReleased="OnSeekBarPointerReleased"
-                    ValueChanged="OnSeekBarValueChanged"
                     AutomationProperties.Name="Seek" />
 
                 <Grid Grid.Row="1" Margin="0,10,0,0">
@@ -164,6 +168,7 @@
                             Margin="8,0,0,0"
                             AutomationProperties.Name="Mute" />
                         <Slider
+                            x:Name="VolumeSlider"
                             Width="88"
                             Minimum="0"
                             Maximum="100"

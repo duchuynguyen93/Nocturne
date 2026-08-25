@@ -264,8 +264,20 @@ public sealed unsafe class MpvClient : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        // Take the writer lock first so any in-flight command finishes against a
-        // live handle. Everything after this point sees _disposed and returns.
+        // Wake the pump BEFORE asking for the writer lock. The pump holds a
+        // reader lock for the whole of mpv_wait_event, so the writer cannot be
+        // granted until that call returns — waking it afterwards, as this used
+        // to, could never arrive in time and every close stalled for up to the
+        // full one-second timeout. mpv_wakeup is thread-safe and the handle is
+        // still alive here.
+        nint handleForWakeup = Volatile.Read(ref _handle);
+        if (handleForWakeup != nint.Zero)
+        {
+            MpvNative.Wakeup(handleForWakeup);
+        }
+
+        // Take the writer lock so any in-flight command finishes against a live
+        // handle. Everything after this point sees _disposed and returns.
         _lifetimeLock.EnterWriteLock();
         nint handle;
         try
@@ -288,18 +300,25 @@ public sealed unsafe class MpvClient : IDisposable
 
         if (handle != nint.Zero)
         {
-            // Wake the pump so it observes cancellation instead of sitting in
-            // mpv_wait_event until its timeout expires.
+            // A second wakeup, now that cancellation is set: the first one may
+            // have been consumed before the flag was visible.
             MpvNative.Wakeup(handle);
         }
 
-        // Bounded join: a wedged decoder must not stop the window from closing.
-        // The thread is a background thread, so a timeout here cannot keep the
-        // process alive either way.
-        if (!_eventThread.Join(TimeSpan.FromSeconds(2)))
+        // Joining from the pump itself would always burn the full timeout and
+        // then tear the handle down from inside a dispatch. It happens when an
+        // event handler disposes the client — reacting to Shutdown that way is a
+        // natural thing to write.
+        if (Environment.CurrentManagedThreadId != _eventThread.ManagedThreadId)
         {
-            LogMessage?.Invoke(this, new MpvLogEventArgs(
-                "nocturne", "warn", "mpv event pump did not stop within two seconds."));
+            // Bounded join: a wedged decoder must not stop the window from
+            // closing. The thread is a background thread, so a timeout here
+            // cannot keep the process alive either way.
+            if (!_eventThread.Join(TimeSpan.FromSeconds(2)))
+            {
+                LogMessage?.Invoke(this, new MpvLogEventArgs(
+                    "nocturne", "warn", "mpv event pump did not stop within two seconds."));
+            }
         }
 
         if (handle != nint.Zero)

@@ -24,25 +24,67 @@ internal static unsafe class MpvNative
     /// <summary>Logical name resolved to a per-platform file by <see cref="Resolve"/>.</summary>
     private const string LibraryName = "mpv";
 
-    private static int _resolverRegistered;
+    /// <summary>
+    /// Registration is done once, by the first caller, and every other caller
+    /// blocks until it has finished.
+    /// </summary>
+    /// <remarks>
+    /// A flag set with <see cref="Interlocked"/> would let a second thread see
+    /// "registered" while the registration call was still running, and P/Invoke
+    /// before the resolver existed — an intermittent
+    /// <see cref="DllNotFoundException"/> that would be miserable to chase.
+    /// </remarks>
+    private static readonly Lazy<bool> Registration = new(RegisterResolvers, isThreadSafe: true);
 
     /// <summary>
     /// Installs the import resolver. Safe to call more than once.
     /// </summary>
-    /// <remarks>
-    /// A module initializer would be tidier, but registration must happen before
-    /// the first P/Invoke and after the assembly is fully loaded, and a static
-    /// constructor on this class gives exactly that ordering guarantee without
-    /// depending on when the runtime chooses to run initializers.
-    /// </remarks>
-    internal static void EnsureResolverRegistered()
+    internal static void EnsureResolverRegistered() => _ = Registration.Value;
+
+    private static bool RegisterResolvers()
     {
-        if (Interlocked.Exchange(ref _resolverRegistered, 1) == 1)
+        // Once per assembly that declares a DllImport against the logical name.
+        // SetDllImportResolver is scoped to one assembly, so registering only
+        // for this one leaves every P/Invoke elsewhere — notably the render API
+        // in Nocturne.Render — probing for a bare "mpv.dll" that does not exist.
+        foreach (Assembly assembly in ResolvedAssemblies)
         {
-            return;
+            NativeLibrary.SetDllImportResolver(assembly, Resolve);
         }
 
-        NativeLibrary.SetDllImportResolver(typeof(MpvNative).Assembly, Resolve);
+        return true;
+    }
+
+    /// <summary>
+    /// Assemblies whose <c>DllImport</c>s name the logical <c>mpv</c> library.
+    /// </summary>
+    /// <remarks>
+    /// Registered here rather than by each assembly calling for itself, so that
+    /// adding a new interop assembly is one line in one place instead of a
+    /// silent failure at the first call.
+    /// </remarks>
+    private static readonly List<Assembly> ResolvedAssemblies = [typeof(MpvNative).Assembly];
+
+    /// <summary>
+    /// Adds an assembly whose P/Invokes should resolve through this resolver.
+    /// </summary>
+    /// <remarks>Must be called before that assembly's first P/Invoke.</remarks>
+    internal static void RegisterCallingAssembly(Assembly assembly)
+    {
+        ArgumentNullException.ThrowIfNull(assembly);
+
+        lock (ResolvedAssemblies)
+        {
+            if (ResolvedAssemblies.Contains(assembly))
+            {
+                return;
+            }
+
+            ResolvedAssemblies.Add(assembly);
+        }
+
+        NativeLibrary.SetDllImportResolver(assembly, Resolve);
+        _ = Registration.Value;
     }
 
     private static nint Resolve(string libraryName, Assembly assembly, DllImportSearchPath? searchPath)
@@ -72,10 +114,15 @@ internal static unsafe class MpvNative
     {
         if (OperatingSystem.IsWindows())
         {
-            // libmpv-2.dll is what the official Windows builds ship. mpv-2.dll
-            // is what some package managers rename it to, and mpv-1.dll is the
-            // pre-0.35 name that still turns up in older redistributions.
-            return ["libmpv-2.dll", "mpv-2.dll", "mpv-1.dll"];
+            // libmpv-2.dll is what the official Windows builds ship; mpv-2.dll is
+            // what some package managers rename it to.
+            //
+            // mpv-1.dll — the pre-0.35 name — is deliberately NOT accepted. Its
+            // mpv_opengl_init_params carries a third field, so the two-field
+            // struct this code passes would leave libmpv reading eight bytes of
+            // stack as an extension string. Failing to load with a clear message
+            // beats crashing inside the GPU driver.
+            return ["libmpv-2.dll", "mpv-2.dll"];
         }
 
         return OperatingSystem.IsMacOS()
