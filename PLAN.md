@@ -50,7 +50,8 @@ artifact.
 - [x] `Nocturne.App` compiles, XAML pass included, 0 warnings and 0 errors.
 - [x] CI produces a green Windows build and publishes an installer to the
   rolling `build-latest` prerelease.
-- [ ] Application icon.
+- [x] Application icon: a nine-size `.ico` (16-256), wired into the executable
+  and the installer.
 - [ ] The app launches. Compiling and packaging is not launching.
 
 Acceptance: a fresh clone restores, builds, and tests on Windows, and the
@@ -112,7 +113,10 @@ SDR and an HDR display.
 
 ## Milestone 4 — Interface completion
 
-- [ ] Application icon at every required size.
+- [x] Application icon at every required size. Sizes at or below 24 px use a
+  reduced mark — the crescent's tapering tips disappear at that scale and the
+  whole icon collapses into a smudge, so those sizes carry the play triangle
+  alone. Verified by rendering the set at 16/20/24/32/48 px on light and dark.
 - [ ] Auto-hiding chrome in fullscreen, on a pointer-idle timer.
 - [ ] Track and settings menus in the design language.
 - [ ] Keyboard shortcut coverage and a shortcut reference.

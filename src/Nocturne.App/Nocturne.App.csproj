@@ -21,11 +21,7 @@
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <SelfContained>true</SelfContained>
 
-    <!--
-      No ApplicationIcon yet. Pointing at an icon that does not exist fails the
-      build, and shipping a placeholder would leave the default .NET icon on the
-      taskbar looking deliberate. Tracked in PLAN.md, Milestone 4.
-    -->
+    <ApplicationIcon>Assets\Nocturne.ico</ApplicationIcon>
     <AssemblyName>Nocturne</AssemblyName>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>

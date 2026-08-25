@@ -31,6 +31,8 @@ OutputBaseFilename=Nocturne-{#AppVersion}-{#AppPlatform}-setup
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile=..\src\Nocturne.App\Assets\Nocturne.ico
+UninstallDisplayIcon={app}\{#AppExeName}
 
 ; Per-user install, no UAC prompt.
 PrivilegesRequired=lowest
