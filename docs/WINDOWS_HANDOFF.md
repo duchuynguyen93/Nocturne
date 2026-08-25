@@ -35,6 +35,16 @@ Be precise about this, because most of the repository has never run.
 - `dotnet publish` produces a self-contained x64 app with `libmpv-2.dll` staged
   beside it, and Inno Setup packages an installer.
 
+**Reviewed, 2026-08-25:** two independent passes over the interop layer and the
+app layer, both told the code had never run. Thirteen defects found and fixed;
+see `CHANGELOG.md`. Four of them would have ended the first session before it
+produced any information — most usefully, the render failure message no longer
+gets overwritten by ordinary playback snapshots, so a machine without ANGLE now
+says so on screen instead of appearing to open and do nothing.
+
+That review is not a substitute for running the thing. It narrows what the first
+session has to discover; it does not tell you the pipeline works.
+
 **Never launched:**
 
 - Nobody has run the executable. Everything that only fails at runtime is ahead:

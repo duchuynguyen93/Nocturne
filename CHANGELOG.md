@@ -79,6 +79,44 @@ this file is where that distinction is kept honest.
   - `FirstOrDefault` on an `IReadOnlyList` (CA1826), and `MainWindow` owning two
     native resources without being disposable (CA1001).
 
+- Thirteen defects found by two independent review passes over code that had
+  never run. Four would each have stopped the first Windows session dead:
+
+  - `SetDllImportResolver` is scoped to a single assembly. The render API's
+    P/Invokes live in `Nocturne.Render` while the resolver was registered for
+    `Nocturne.Engine`, so every render call would have probed for a bare
+    `mpv.dll` — a file no libmpv distribution contains.
+  - ANGLE was handed the app's Direct3D device through a display attribute.
+    `EGL_D3D11_DEVICE_ANGLE` is a device-creation token, not a display
+    attribute; at best ANGLE ignored it and silently created a second device,
+    breaking the single-device invariant the whole pipeline rests on. The
+    supported route is `eglCreateDeviceANGLE` followed by
+    `eglGetPlatformDisplayEXT` with `EGL_PLATFORM_DEVICE_EXT`. The same call
+    takes a 32-bit `EGLint` attribute list, not a pointer-sized one; the comment
+    asserting otherwise was wrong.
+  - `RangeBase.ValueChanged` fires for programmatic writes as well as gestures,
+    and `FocusState` says nothing about where a change came from. One click on
+    the seek bar would have turned every position update the engine publishes
+    into a fresh seek.
+  - `Slider` marks `PointerPressed` and `PointerReleased` as handled to capture
+    the pointer, so the scrub-suppression handlers attached in XAML never ran at
+    all. The mechanism looked wired up and was inert.
+
+  Also: `mpv_render_context_free` called without a current GL context; native
+  resources torn down under a render thread that had failed to stop, which is
+  what the comment there promised not to do; `mpv_wakeup` issued after the
+  writer lock was requested and so never in time, stalling every close for up to
+  a second; `playlist_insert_id` declared `int` where `client.h` has `int64_t`,
+  shifting every field after it; the `mpv-1.dll` fallback, whose
+  `mpv_opengl_init_params` has a third field this code does not pass; the render
+  failure message overwritten by ordinary snapshots within milliseconds, which
+  on any machine without ANGLE reads as "the app opened and did nothing";
+  `KeyDown` shortcuts dead at startup because nothing focusable exists yet;
+  `Ctrl+O` advertised on the empty state and never implemented; the playlist
+  mutated from the engine's pump thread; `async void OnDrop` with no `catch`, so
+  one virtual drag source kills the process; a 40px title bar left across the top
+  in full screen.
+
 - `Timecode.FromSeconds` threw `OverflowException` on an absurd duration. It
   clamped after constructing the `TimeSpan`, and `TimeSpan.FromSeconds` throws
   for magnitudes it cannot represent — so the clamp never got the chance to run.
@@ -94,7 +132,7 @@ On the authoring macOS machine, 2026-08-25:
   set. `Nocturne.Render` compiles off Windows via `EnableWindowsTargeting`, which
   checks interop signatures, nullability, and analyzer conformance — and nothing
   about runtime behaviour.
-- 67 tests pass.
+- 70 tests pass.
 
 In CI on `windows-latest`, run `32820878154`:
 
