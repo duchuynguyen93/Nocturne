@@ -181,7 +181,7 @@
                         Spacing="6">
                         <TextBlock
                             Style="{StaticResource TimecodeTextStyle}"
-                            Text="{x:Bind ViewModel.Timecode, Mode=OneWay}"
+                            Text="{x:Bind ViewModel.TimecodeText, Mode=OneWay}"
                             VerticalAlignment="Center"
                             Margin="0,0,10,0" />
                         <Button

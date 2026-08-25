@@ -42,8 +42,11 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private string _windowTitle = "Nocturne";
 
+    // Named TimecodeText, not Timecode: the generated property would otherwise
+    // shadow the Nocturne.Core.Text.Timecode helper class inside this type, and
+    // every call to it would bind to a string instead.
     [ObservableProperty]
-    private string _timecode = "00:00 / --:--";
+    private string _timecodeText = "00:00 / --:--";
 
     [ObservableProperty]
     private string _overlayChipText = string.Empty;
@@ -224,7 +227,7 @@ public sealed partial class PlayerViewModel : ObservableObject, IDisposable
     private void ApplySnapshot(PlaybackSnapshot snapshot)
     {
         (string position, string duration) = Timecode.FormatPair(snapshot.Position, snapshot.Duration);
-        Timecode = $"{position} / {duration}";
+        TimecodeText = $"{position} / {duration}";
 
         if (!_isScrubbing)
         {

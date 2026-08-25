@@ -266,11 +266,12 @@
         <Setter Property="FontSize" Value="{StaticResource TextSizeCaption}" />
         <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
         <!--
-          Tabular figures. Without this the elapsed field jitters horizontally
-          every second as proportional digits change width, which is the most
-          distracting thing a transport bar can do.
+          Fixed-width digits come from the font itself, not from an OpenType
+          feature: WinUI has no FontFeatures property and no Typography attached
+          properties, so the monospace family in MonoFontFamily is what stops
+          the elapsed field jittering horizontally as it counts. Do not swap
+          this style onto a proportional face.
         -->
-        <Setter Property="FontFeatures" Value="tnum" />
     </Style>
 
 </ResourceDictionary>

@@ -119,12 +119,15 @@ grey track, amber fill, no handle. That is a progress indicator. Under the
 pointer the track grows to 6px and a 12px thumb fades in, and it becomes a
 control.
 
-**Timecodes are mono with tabular figures.** `FontFeatures="tnum"` on
-`TimecodeTextStyle`. Without it, proportional digits change width as they count
-and the whole right-hand cluster jitters horizontally once a second, which is
-the single most distracting thing a transport bar can do. `Timecode.FormatPair`
-handles the other half of the same problem by choosing one shape for both halves
-of the pair.
+**Timecodes are monospace, and that is load-bearing.** With a proportional face
+the digits change width as they count, so the whole right-hand cluster jitters
+horizontally once a second — the single most distracting thing a transport bar
+can do. WinUI has no `FontFeatures` property and no `Typography` attached
+properties, so there is no way to ask for tabular figures from a proportional
+font: the fixed-width family in `MonoFontFamily` *is* the fix. Do not apply
+`TimecodeTextStyle` to a proportional face. `Timecode.FormatPair` handles the
+other half of the same problem by choosing one shape for both halves of the pair
+so the field never changes width at the one-hour mark either.
 
 ## 4. Dark only
 
