@@ -50,11 +50,18 @@ chain is created with `CreateSwapChainForComposition` rather than
 that point the video is a visual in the same composition tree as the XAML — so
 alpha, transforms, and animations all work across the boundary.
 
-The join at the top is the one that makes it fast. ANGLE is initialized on the
-app's own `ID3D11Device` via `EGL_PLATFORM_ANGLE_D3D11_DEVICE_ANGLE`, and the
-render target is a texture the app created, wrapped as an EGL pbuffer through
+The join at the top is the one that makes it fast. The app's own `ID3D11Device`
+is wrapped as an `EGLDeviceEXT` with `eglCreateDeviceANGLE`, and the display is
+built on that device with `eglGetPlatformDisplayEXT(EGL_PLATFORM_DEVICE_EXT, …)`.
+The render target is a texture the app created, wrapped as an EGL pbuffer through
 `EGL_ANGLE_d3d_texture_client_buffer`. One device means no shared handles, no
 keyed mutexes, and no fence wait inside the presentation interval.
+
+There is no display *attribute* that takes a raw `ID3D11Device*`. An earlier
+version of this code put `EGL_D3D11_DEVICE_ANGLE` — a device-creation token — in
+the attribute list, where at best ANGLE ignores it and quietly creates a second
+device of its own, which dissolves the single-device property this whole section
+is about.
 
 ## 3. Why not the simpler options
 
@@ -79,35 +86,49 @@ and codec coverage limited to what the OS ships.
 
 ## 4. Risks
 
-### Risk 1 — ANGLE is not distributed with libmpv
+### Risk 1 — sourcing ANGLE (resolved 2026-08-26)
 
-**This is the largest unknown in the project.** mpv removed its own ANGLE
-backend in 0.37, so current libmpv Windows builds ship no `libEGL.dll`.
+mpv removed its own ANGLE backend in 0.37, so libmpv Windows builds ship no
+`libEGL.dll`. That does not break this design — Nocturne never used mpv's ANGLE
+backend; it creates its own EGL context and passes libmpv the resulting GL entry
+points through `MPV_RENDER_PARAM_OPENGL_INIT_PARAMS`, and the render API does not
+care where the context came from. But the binaries had to come from somewhere.
 
-That removal does not by itself break this design. Nocturne does not use mpv's
-ANGLE backend; it creates its own EGL context and passes libmpv the resulting GL
-entry points through `MPV_RENDER_PARAM_OPENGL_INIT_PARAMS`. libmpv's render API
-does not care where the GL context came from. But the ANGLE binaries have to
-come from somewhere, and that somewhere is now separate from mpv.
+**Resolved: the MSYS2 `mingw-w64-x86_64-angleproject` package.** An 11 MB
+download from `repo.msys2.org`, pinned to an exact version in
+`scripts/fetch-mpv.ps1`. Verified before adopting:
 
-Sources, best first:
+- `eglCreateDeviceANGLE` and `eglReleaseDeviceANGLE` are exported from its
+  `libEGL.dll` — this is what lets ANGLE run on the app's own D3D11 device.
+- `EGL_ANGLE_d3d_texture_client_buffer` is present, with
+  `EGL_D3D_TEXTURE_ANGLE` at `0x33A3`, matching the constant this code uses.
+- `EGL_PLATFORM_ANGLE_TYPE_D3D11_ANGLE` is `0x3208`, likewise.
 
-1. **Build ANGLE from source.** Authoritative, reproducible, pinnable. Costs a
-   Chromium-style `depot_tools` checkout.
-2. **Take the pair from an Electron or Chromium distribution.** Both ship
-   `libEGL.dll` and `libGLESv2.dll` built from ANGLE. Fine for development;
-   check redistribution terms before shipping.
-3. **A Qt 5 installation.** Older Qt bundled ANGLE. Likely too old to carry
-   `EGL_ANGLE_d3d_texture_client_buffer` in a usable state.
+The package also ships a Vulkan-backed `libEGL_vulkan_secondaries.dll` and a
+capture-enabled `libGLESv2_with_capture.dll`; the fetch script filters both out.
 
-If it turns out no obtainable ANGLE build exposes the extensions this code
-needs, the fallback is to abandon the OpenGL render API and embed via `--wid`,
-composing the two visuals with DirectComposition and giving up the ability to
-put translucent XAML over the video. That is a real architectural retreat and
-should be a recorded decision, not a quiet patch.
+Two sources were tried and rejected, recorded so nobody repeats the search:
 
-**Verify this before writing any more render code.** The spike in
-[`WINDOWS_HANDOFF.md`](WINDOWS_HANDOFF.md) exists for exactly this.
+- **Electron and Chrome.** Modern builds link ANGLE statically into the main
+  binary and ship no `libEGL.dll` at all. Checked against Electron v44, which
+  contains only `d3dcompiler_47.dll`. Older Electron did ship the pair, but
+  pinning a three-year-old Chromium for a graphics translator is worse than
+  taking a maintained package.
+- **Qt 5's bundled ANGLE.** Far too old to carry the extensions above.
+
+The pin matters. ANGLE is the one dependency whose exact build decides whether
+the pipeline works, so an unannounced upgrade must not arrive with a routine CI
+run.
+
+**Still unverified:** that this ANGLE build actually renders a frame on real
+hardware. Exports and headers say the entry points exist; nothing yet says the
+pipeline draws. The spike in [`WINDOWS_HANDOFF.md`](WINDOWS_HANDOFF.md) is still
+the next step.
+
+**If it fails anyway,** the fallback is unchanged: abandon the OpenGL render API,
+embed via `--wid`, compose the two visuals with DirectComposition, and give up
+translucent XAML over the video. That is an architectural retreat and belongs in
+a superseding ADR, not a quiet patch.
 
 ### Risk 2 — orientation
 

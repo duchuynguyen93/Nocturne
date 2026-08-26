@@ -12,12 +12,16 @@
     libmpv is fetched automatically from the shinchiro build of mpv, which is
     the de facto official Windows distribution.
 
-    ANGLE is NOT bundled with libmpv and must be supplied separately. mpv removed
-    its own ANGLE backend in 0.37, so current libmpv builds ship no EGL. Nocturne
-    does not use mpv's ANGLE backend — it creates its own ANGLE context and hands
-    libmpv the resulting GL entry points through the render API — but the DLLs
-    still have to come from somewhere. Pass -AnglePath pointing at a folder that
-    contains both files. See docs/RENDERING.md for where to get them.
+    ANGLE is not bundled with libmpv: mpv removed its own ANGLE backend in 0.37,
+    so current libmpv builds ship no EGL at all. Nocturne does not use mpv's
+    ANGLE backend — it creates its own ANGLE context and hands libmpv the
+    resulting GL entry points through the render API — but the DLLs still have to
+    come from somewhere.
+
+    They are fetched from the MSYS2 mingw64 'angleproject' package. Two other
+    sources were tried and rejected: current Electron and Chrome build ANGLE
+    statically into the main binary and ship no libEGL.dll at all, and Qt 5's
+    bundled ANGLE is far too old to carry the extensions this code needs.
 
     Nothing this script downloads is committed; native\ is git-ignored.
 
@@ -25,8 +29,8 @@
     x64 or arm64. Defaults to the host architecture.
 
 .PARAMETER AnglePath
-    Folder containing libEGL.dll and libGLESv2.dll. Optional: without it the
-    script fetches libmpv only and reports what is still missing.
+    Folder containing libEGL.dll and libGLESv2.dll, to use instead of the MSYS2
+    package — for testing a different ANGLE build.
 
 .PARAMETER Force
     Re-download even when the files are already present.
@@ -125,8 +129,16 @@ GitHub-hosted Windows runners already have it.
     Write-Host "Placed $mpvDll"
 }
 
+# ── ANGLE ────────────────────────────────────────────────────────────────────
+
+# Pinned rather than "latest": ANGLE is the one dependency whose exact build
+# decides whether the render pipeline works at all, so an unannounced upgrade
+# must never arrive silently with an ordinary CI run.
+$anglePackage = 'mingw-w64-x86_64-angleproject-2.1.r25748.890b5d8f-4-any.pkg.tar.zst'
+$angleFiles = @('libEGL.dll', 'libGLESv2.dll')
+
 if ($AnglePath) {
-    foreach ($name in @('libEGL.dll', 'libGLESv2.dll')) {
+    foreach ($name in $angleFiles) {
         $source = Join-Path $AnglePath $name
         if (-not (Test-Path $source)) {
             throw "$name not found in $AnglePath."
@@ -134,6 +146,50 @@ if ($AnglePath) {
 
         Copy-Item $source (Join-Path $targetDir $name) -Force
         Write-Host "Placed $(Join-Path $targetDir $name)"
+    }
+} elseif ($Architecture -ne 'x64') {
+    Write-Warning "The MSYS2 ANGLE package is x64 only. Supply -AnglePath for $Architecture."
+} else {
+    $present = $angleFiles | Where-Object { Test-Path (Join-Path $targetDir $_) }
+    if ($present.Count -eq $angleFiles.Count -and -not $Force) {
+        Write-Host "ANGLE already present. Use -Force to re-download."
+    } else {
+        $sevenZip = Get-Command 7z -ErrorAction SilentlyContinue
+        if (-not $sevenZip) {
+            throw '7z is required to unpack the ANGLE package and was not found on PATH.'
+        }
+
+        $archive = Join-Path ([System.IO.Path]::GetTempPath()) $anglePackage
+        Write-Host "Downloading $anglePackage"
+        Invoke-WebRequest -Uri "https://repo.msys2.org/mingw/mingw64/$anglePackage" `
+            -OutFile $archive -UseBasicParsing
+
+        $extractDir = Join-Path ([System.IO.Path]::GetTempPath()) 'nocturne-angle'
+        if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
+
+        # Two passes: .tar.zst decompresses to .tar, which then unpacks. Windows'
+        # own tar cannot be relied on to read zstd.
+        & 7z x $archive "-o$extractDir" -y | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "7z exited with $LASTEXITCODE unpacking zstd." }
+
+        $tarFile = Get-ChildItem -Path $extractDir -Filter '*.tar' | Select-Object -First 1
+        if (-not $tarFile) { throw 'The ANGLE package did not contain a tar archive.' }
+
+        & 7z x $tarFile.FullName "-o$extractDir" -y | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "7z exited with $LASTEXITCODE unpacking tar." }
+
+        foreach ($name in $angleFiles) {
+            $found = Get-ChildItem -Path $extractDir -Filter $name -Recurse |
+                Where-Object { $_.FullName -notmatch 'vulkan_secondaries|with_capture' } |
+                Select-Object -First 1
+            if (-not $found) { throw "$name was not in the ANGLE package." }
+
+            Copy-Item $found.FullName (Join-Path $targetDir $name) -Force
+            Write-Host "Placed $(Join-Path $targetDir $name)"
+        }
+
+        Remove-Item $archive -Force
+        Remove-Item $extractDir -Recurse -Force
     }
 }
 
@@ -145,5 +201,6 @@ if ($missing) {
     Write-Warning "Re-run with -AnglePath <folder>. See docs/RENDERING.md."
     exit 2
 }
+
 
 Write-Host "Native runtime complete in $targetDir" -ForegroundColor Green

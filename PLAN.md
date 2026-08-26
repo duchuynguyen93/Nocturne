@@ -58,7 +58,7 @@ Acceptance: a fresh clone restores, builds, and tests on Windows, and the
 Actions run yields an installer. **Met except for launch**, which needs a
 Windows machine.
 
-## Milestone 1 — The spike BLOCKED on ANGLE binaries
+## Milestone 1 — The spike
 
 Goal: prove the composition pipeline. Nothing else proceeds until this passes.
 
@@ -74,11 +74,10 @@ Goal: prove the composition pipeline. Nothing else proceeds until this passes.
 Acceptance: a file plays in the window with the transport bar translucent over
 it. See `docs/WINDOWS_HANDOFF.md` step 1.
 
-**Blocked because** ANGLE is no longer distributed with libmpv and must be
-sourced separately. If no obtainable build exposes
-`EGL_ANGLE_d3d_texture_client_buffer`, the architecture changes — see
-`docs/RENDERING.md` Risk 1. This is the single most important open question in
-the project.
+**No longer blocked.** ANGLE now comes from the MSYS2 `angleproject` package,
+pinned in `scripts/fetch-mpv.ps1` and bundled by CI, and its `libEGL.dll` was
+checked for the exports and extensions this design needs before adoption. See
+`docs/RENDERING.md` Risk 1. What remains is to run it.
 
 ## Milestone 2 — Playback
 
@@ -144,8 +143,7 @@ SDR and an HDR display.
 
 ## Open questions
 
-1. **ANGLE.** Milestone 1's blocker. Everything downstream assumes it resolves.
-2. **Library or no library.** The current answer is no, and the design leans on
+1. **Library or no library.** The current answer is no, and the design leans on
    it: the playlist is a folder listing. Reversing it later is a large change.
-3. **Plugins.** Lumen exposes a JavaScript surface. Designing one before the
+2. **Plugins.** Lumen exposes a JavaScript surface. Designing one before the
    app's own vocabulary is stable would fossilise the wrong one.

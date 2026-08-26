@@ -41,6 +41,8 @@ public sealed partial class MainWindow : Window, IDisposable
         SetTitleBar(TitleBarGrid);
         Title = "Nocturne";
 
+        ApplyInitialSize();
+
         ApplyTitleBarColors();
 
         _engine = new PlayerEngine(EngineOptions.Default);
@@ -130,6 +132,28 @@ public sealed partial class MainWindow : Window, IDisposable
 
     /// <summary>Opens the file the app was launched with.</summary>
     public void OpenOnLaunch(string path) => ViewModel.Open(path);
+
+    /// <summary>
+    /// Gives the window a real starting size.
+    /// </summary>
+    /// <remarks>
+    /// Without this the window sizes itself to its content, and the content is a
+    /// grid whose only non-collapsed child may be a small message. The first
+    /// build to reach a real machine opened as a 610x155 sliver holding nothing
+    /// but an error card — the star-sized rows had nothing to stretch against,
+    /// so they measured to the card.
+    /// <para>
+    /// Set through <c>AppWindow</c> rather than through XAML because
+    /// <c>Window</c> in WinUI has no Width or Height property to set.
+    /// </para>
+    /// </remarks>
+    private void ApplyInitialSize()
+    {
+        // Physical pixels. A 16:9 window on a 100% display; on a 150% display
+        // Windows scales it, which is the behaviour a user expects from a
+        // remembered size they have not yet chosen.
+        AppWindow.Resize(new Windows.Graphics.SizeInt32(1280, 760));
+    }
 
     /// <summary>
     /// Paints the system caption buttons to match the window.

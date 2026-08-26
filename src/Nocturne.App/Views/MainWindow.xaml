@@ -6,7 +6,15 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
 
-    <Grid x:Name="RootGrid" Background="{StaticResource WindowBackgroundBrush}">
+    <!--
+        The minimums are insurance, not layout. A star-sized row measures to its
+        content when the window imposes no size of its own, so a window that
+        failed to get an explicit size once opened as a sliver just tall enough
+        to hold an error card. ApplyInitialSize is the real fix; this makes the
+        failure mode impossible rather than merely unlikely.
+    -->
+    <Grid x:Name="RootGrid" Background="{StaticResource WindowBackgroundBrush}"
+          MinWidth="640" MinHeight="400">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />

@@ -66,19 +66,15 @@ jobs:
         shell: pwsh
         run: dotnet --info
 
-      # libmpv only. ANGLE is not distributed with mpv and is not fetched here;
-      # the published build therefore compiles and launches but reports a render
-      # initialization failure until libEGL.dll and libGLESv2.dll are placed
-      # beside the executable. See docs/RENDERING.md, Risk 1.
+      # libmpv from the shinchiro build, ANGLE from the MSYS2 angleproject
+      # package. A non-zero exit means one of them is missing, and a build that
+      # ships without either cannot draw a frame — so this is allowed to fail
+      # the job rather than producing an installer that looks fine and is not.
       - name: Fetch native runtime
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          ./scripts/fetch-mpv.ps1 -Architecture ${{ matrix.platform }}
-          # Exit code 2 means ANGLE is still missing, which is expected here.
-          if ($LASTEXITCODE -notin @(0, 2)) { exit $LASTEXITCODE }
-          exit 0
+        run: ./scripts/fetch-mpv.ps1 -Architecture ${{ matrix.platform }}
 
       - name: Restore
         shell: pwsh
@@ -110,9 +106,14 @@ jobs:
           if (Test-Path $source) {
             Copy-Item "$source/*.dll" "artifacts/publish/${{ matrix.platform }}/" -Force
           }
-          Get-ChildItem "artifacts/publish/${{ matrix.platform }}" -Filter *.dll |
-            Where-Object { $_.Name -match 'mpv|EGL|GLES' } |
-            ForEach-Object { Write-Host "native: $($_.Name)" }
+          # A publish missing any of these builds and installs cleanly and then
+          # cannot draw a frame. Checking here beats finding out on a user's
+          # machine with a message about a missing DLL.
+          $required = @('libmpv-2.dll', 'libEGL.dll', 'libGLESv2.dll')
+          $dest = "artifacts/publish/${{ matrix.platform }}"
+          $absent = $required | Where-Object { -not (Test-Path (Join-Path $dest $_)) }
+          if ($absent) { throw "Publish is missing: $($absent -join ', ')" }
+          $required | ForEach-Object { Write-Host "native: $_" }
 
       - name: Build installer
         shell: pwsh
@@ -153,10 +154,7 @@ jobs:
           $notes = @"
           Automatic build of ``$env:GITHUB_SHA``.
 
-          **This build cannot play anything yet.** ANGLE (``libEGL.dll``,
-          ``libGLESv2.dll``) is not distributed with libmpv and is not bundled
-          here, so the app launches and reports a render initialization failure.
-          See docs/RENDERING.md, Risk 1.
+          Bundles libmpv and ANGLE. Self-contained — no .NET install needed.
           "@
 
           gh release create $tag `
