@@ -15,6 +15,7 @@
 #define AppVersion "0.1.0"
 #define AppPublisher "Nocturne"
 #define AppExeName "Nocturne.exe"
+#define ProgId "Nocturne.Media"
 #define SourceDir "..\artifacts\publish\" + AppPlatform
 
 [Setup]
@@ -31,6 +32,11 @@ OutputBaseFilename=Nocturne-{#AppVersion}-{#AppPlatform}-setup
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
+ChangesAssociations=yes
+; Makes Inno raise SHCNE_ASSOCCHANGED after install. Without it Explorer keeps
+; its cached associations until the next sign-in, so a user who installs and
+; immediately right-clicks a file sees nothing change even though the registry
+; is correct.
 SetupIconFile=..\src\Nocturne.App\Assets\Nocturne.ico
 UninstallDisplayIcon={app}\{#AppExeName}
 
@@ -54,7 +60,6 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"
-Name: "associate"; Description: "Open video files with {#AppName}"; GroupDescription: "File associations:"; Flags: unchecked
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -68,9 +73,10 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: deskto
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\App Paths\{#AppExeName}"; \
     ValueType: string; ValueName: ""; ValueData: "{app}\{#AppExeName}"; Flags: uninsdeletekey
 
-; The capability entry. Registering here rather than writing the extension keys
-; directly is what lets Windows offer Nocturne in "Open with" and in Default
-; Apps, instead of silently seizing the association.
+; The capability entry: it is what puts the app on the Default apps page in
+; Settings. On its own it does NOT place the app in the "Open with" menu — the
+; first release shipped only this and the association appeared to do nothing.
+; See the three-mechanism note further down.
 Root: HKCU; Subkey: "Software\{#AppName}\Capabilities"; \
     ValueType: string; ValueName: "ApplicationName"; ValueData: "{#AppName}"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\{#AppName}\Capabilities"; \
@@ -79,27 +85,63 @@ Root: HKCU; Subkey: "Software\RegisteredApplications"; \
     ValueType: string; ValueName: "{#AppName}"; ValueData: "Software\{#AppName}\Capabilities"; \
     Flags: uninsdeletevalue
 
-Root: HKCU; Subkey: "Software\Classes\{#AppName}.Media"; \
+Root: HKCU; Subkey: "Software\Classes\{#ProgId}"; \
     ValueType: string; ValueName: ""; ValueData: "Media file"; Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\Classes\{#AppName}.Media\DefaultIcon"; \
+Root: HKCU; Subkey: "Software\Classes\{#ProgId}\DefaultIcon"; \
     ValueType: string; ValueName: ""; ValueData: "{app}\{#AppExeName},0"
-Root: HKCU; Subkey: "Software\Classes\{#AppName}.Media\shell\open\command"; \
+Root: HKCU; Subkey: "Software\Classes\{#ProgId}\shell\open\command"; \
     ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExeName}"" ""%1"""
 
-; One capability line per extension. Kept in step with
-; MediaFormats.VideoExtensions in Nocturne.Core.
-Root: HKCU; Subkey: "Software\{#AppName}\Capabilities\FileAssociations"; ValueType: string; ValueName: ".mkv"; ValueData: "{#AppName}.Media"; Tasks: associate
-Root: HKCU; Subkey: "Software\{#AppName}\Capabilities\FileAssociations"; ValueType: string; ValueName: ".mp4"; ValueData: "{#AppName}.Media"; Tasks: associate
-Root: HKCU; Subkey: "Software\{#AppName}\Capabilities\FileAssociations"; ValueType: string; ValueName: ".m4v"; ValueData: "{#AppName}.Media"; Tasks: associate
-Root: HKCU; Subkey: "Software\{#AppName}\Capabilities\FileAssociations"; ValueType: string; ValueName: ".mov"; ValueData: "{#AppName}.Media"; Tasks: associate
-Root: HKCU; Subkey: "Software\{#AppName}\Capabilities\FileAssociations"; ValueType: string; ValueName: ".avi"; ValueData: "{#AppName}.Media"; Tasks: associate
-Root: HKCU; Subkey: "Software\{#AppName}\Capabilities\FileAssociations"; ValueType: string; ValueName: ".webm"; ValueData: "{#AppName}.Media"; Tasks: associate
-Root: HKCU; Subkey: "Software\{#AppName}\Capabilities\FileAssociations"; ValueType: string; ValueName: ".ts"; ValueData: "{#AppName}.Media"; Tasks: associate
-Root: HKCU; Subkey: "Software\{#AppName}\Capabilities\FileAssociations"; ValueType: string; ValueName: ".m2ts"; ValueData: "{#AppName}.Media"; Tasks: associate
+; Three separate mechanisms, each feeding a different part of Windows. Missing
+; any one of them removes the app from that place only, so they do not collapse
+; into each other.
+;
+;   Capabilities\FileAssociations  -> the Default apps page in Settings
+;   <ext>\OpenWithProgIds          -> the right-click "Open with" menu
+;   Classes\Applications\<exe>     -> the "Choose another app" dialog
+;
+; Registered unconditionally, with no checkbox. Appearing in "Open with" is
+; harmless and is what someone expects after deliberately installing a player.
+; Becoming the DEFAULT is a different matter: since Windows 10 an installer is
+; not allowed to do that silently. See [Run] at the end of this file.
+Root: HKCU; Subkey: "Software\{#AppName}\Capabilities\FileAssociations"; ValueType: string; ValueName: ".mkv"; ValueData: "{#ProgId}"
+Root: HKCU; Subkey: "Software\{#AppName}\Capabilities\FileAssociations"; ValueType: string; ValueName: ".mp4"; ValueData: "{#ProgId}"
+Root: HKCU; Subkey: "Software\{#AppName}\Capabilities\FileAssociations"; ValueType: string; ValueName: ".m4v"; ValueData: "{#ProgId}"
+Root: HKCU; Subkey: "Software\{#AppName}\Capabilities\FileAssociations"; ValueType: string; ValueName: ".mov"; ValueData: "{#ProgId}"
+Root: HKCU; Subkey: "Software\{#AppName}\Capabilities\FileAssociations"; ValueType: string; ValueName: ".avi"; ValueData: "{#ProgId}"
+Root: HKCU; Subkey: "Software\{#AppName}\Capabilities\FileAssociations"; ValueType: string; ValueName: ".webm"; ValueData: "{#ProgId}"
+Root: HKCU; Subkey: "Software\{#AppName}\Capabilities\FileAssociations"; ValueType: string; ValueName: ".ts"; ValueData: "{#ProgId}"
+Root: HKCU; Subkey: "Software\{#AppName}\Capabilities\FileAssociations"; ValueType: string; ValueName: ".m2ts"; ValueData: "{#ProgId}"
+
+Root: HKCU; Subkey: "Software\Classes\.mkv\OpenWithProgIds"; ValueType: string; ValueName: "{#ProgId}"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\.mp4\OpenWithProgIds"; ValueType: string; ValueName: "{#ProgId}"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\.m4v\OpenWithProgIds"; ValueType: string; ValueName: "{#ProgId}"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\.mov\OpenWithProgIds"; ValueType: string; ValueName: "{#ProgId}"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\.avi\OpenWithProgIds"; ValueType: string; ValueName: "{#ProgId}"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\.webm\OpenWithProgIds"; ValueType: string; ValueName: "{#ProgId}"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\.ts\OpenWithProgIds"; ValueType: string; ValueName: "{#ProgId}"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\.m2ts\OpenWithProgIds"; ValueType: string; ValueName: "{#ProgId}"; ValueData: ""; Flags: uninsdeletevalue
+
+Root: HKCU; Subkey: "Software\Classes\Applications\{#AppExeName}"; ValueType: string; ValueName: "FriendlyAppName"; ValueData: "{#AppName}"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\Applications\{#AppExeName}\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExeName}"" ""%1"""
+Root: HKCU; Subkey: "Software\Classes\Applications\{#AppExeName}\SupportedTypes"; ValueType: string; ValueName: ".mkv"; ValueData: ""
+Root: HKCU; Subkey: "Software\Classes\Applications\{#AppExeName}\SupportedTypes"; ValueType: string; ValueName: ".mp4"; ValueData: ""
+Root: HKCU; Subkey: "Software\Classes\Applications\{#AppExeName}\SupportedTypes"; ValueType: string; ValueName: ".m4v"; ValueData: ""
+Root: HKCU; Subkey: "Software\Classes\Applications\{#AppExeName}\SupportedTypes"; ValueType: string; ValueName: ".mov"; ValueData: ""
+Root: HKCU; Subkey: "Software\Classes\Applications\{#AppExeName}\SupportedTypes"; ValueType: string; ValueName: ".avi"; ValueData: ""
+Root: HKCU; Subkey: "Software\Classes\Applications\{#AppExeName}\SupportedTypes"; ValueType: string; ValueName: ".webm"; ValueData: ""
+Root: HKCU; Subkey: "Software\Classes\Applications\{#AppExeName}\SupportedTypes"; ValueType: string; ValueName: ".ts"; ValueData: ""
+Root: HKCU; Subkey: "Software\Classes\Applications\{#AppExeName}\SupportedTypes"; ValueType: string; ValueName: ".m2ts"; ValueData: ""
 
 [Run]
+
+; Windows 10 and later do not let an installer seize default associations. The
+; most an installer can honestly do is open the page where the user makes that
+; choice, which beats a checkbox that promises something impossible.
 Filename: "{app}\{#AppExeName}"; Description: "Launch {#AppName}"; \
     Flags: nowait postinstall skipifsilent
+Filename: "ms-settings:defaultapps"; Description: "Choose {#AppName} as the default player (opens Windows Settings)"; \
+    Flags: postinstall shellexec nowait skipifsilent unchecked
 
 [UninstallDelete]
 ; Settings live here once the settings milestone lands. Removing the folder on
