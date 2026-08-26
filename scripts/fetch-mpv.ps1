@@ -150,7 +150,10 @@ if ($AnglePath) {
 } elseif ($Architecture -ne 'x64') {
     Write-Warning "The MSYS2 ANGLE package is x64 only. Supply -AnglePath for $Architecture."
 } else {
-    $present = $angleFiles | Where-Object { Test-Path (Join-Path $targetDir $_) }
+    # @() bắt buộc: dưới Set-StrictMode, Where-Object trả về $null khi không khớp
+    # gì và trả về một phần tử đơn lẻ khi khớp đúng một — cả hai đều không có
+    # thuộc tính Count, và script sẽ chết ngay dòng dưới.
+    $present = @($angleFiles | Where-Object { Test-Path (Join-Path $targetDir $_) })
     if ($present.Count -eq $angleFiles.Count -and -not $Force) {
         Write-Host "ANGLE already present. Use -Force to re-download."
     } else {
