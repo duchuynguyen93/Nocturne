@@ -9,6 +9,7 @@ using Nocturne.App.ViewModels;
 using Nocturne.Core.Media;
 using Nocturne.Core.Playback;
 using Nocturne.Engine.Client;
+using Nocturne.Engine.Interop;
 using Nocturne.Render.Pipeline;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage;
@@ -56,7 +57,7 @@ public sealed partial class MainWindow : Window, IDisposable
 
         DiagnosticLog.Current.Write(
             "engine",
-            $"libmpv client API {PlayerEngine.ApiVersion.Major}.{PlayerEngine.ApiVersion.Minor}");
+            $"libmpv client API {MpvRuntime.ApiVersion.Major}.{MpvRuntime.ApiVersion.Minor}");
 
         ViewModel = new PlayerViewModel(_engine, DispatcherQueue);
 
