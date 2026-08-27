@@ -92,8 +92,13 @@ public sealed unsafe class VideoRenderer : IDisposable
     /// <param name="mpvHandle">Handle from an initialized <c>PlayerEngine</c>.</param>
     /// <param name="width">Initial surface width in physical pixels.</param>
     /// <param name="height">Initial surface height in physical pixels.</param>
+    /// <param name="trace">
+    /// Receives one line per initialization stage. The pipeline has six stages
+    /// that can each fail for unrelated reasons, and on a machine the author
+    /// cannot reach, knowing which one stopped is most of the diagnosis.
+    /// </param>
     /// <exception cref="RenderInitializationException">Any stage failed.</exception>
-    public static VideoRenderer Create(nint mpvHandle, int width, int height)
+    public static VideoRenderer Create(nint mpvHandle, int width, int height, Action<string>? trace = null)
     {
         if (mpvHandle == nint.Zero)
         {
@@ -115,7 +120,7 @@ public sealed unsafe class VideoRenderer : IDisposable
         var renderer = new VideoRenderer(key);
         try
         {
-            renderer.Initialize(mpvHandle, Math.Max(1, width), Math.Max(1, height));
+            renderer.Initialize(mpvHandle, Math.Max(1, width), Math.Max(1, height), trace);
         }
         catch
         {
@@ -165,24 +170,38 @@ public sealed unsafe class VideoRenderer : IDisposable
         _frameAvailable.Set();
     }
 
-    private void Initialize(nint mpvHandle, int width, int height)
+    private void Initialize(nint mpvHandle, int width, int height, Action<string>? trace)
     {
+        void Step(string message) => trace?.Invoke(message);
+
         _pendingWidth = width;
         _pendingHeight = height;
         _surfaceWidth = width;
         _surfaceHeight = height;
 
-        CreateDevice();
-        CreateSwapChain(width, height);
+        Step($"surface {width}x{height}");
 
-        _angle = AngleContext.Create(_device);
+        CreateDevice();
+        Step($"D3D11 device created, feature level {_device.FeatureLevel}");
+
+        CreateSwapChain(width, height);
+        Step("composition swap chain created");
+
+        _angle = AngleContext.Create(_device, trace);
+        Step("ANGLE context created");
+
         CreateRenderSurface(width, height);
+        Step("render texture wrapped as an EGL pbuffer");
 
         // The context must be current on the thread that creates the mpv render
         // context, and on every thread that renders. The render thread makes it
         // current again as its first act.
         _angle.MakeCurrent(_eglSurface);
+        Step("EGL context made current");
+
         CreateMpvRenderContext(mpvHandle);
+        Step("mpv render context created");
+
         _angle.ClearCurrent();
     }
 
@@ -318,9 +337,10 @@ public sealed unsafe class VideoRenderer : IDisposable
         if (_eglSurface == Egl.EGL_NO_SURFACE)
         {
             throw new RenderInitializationException(
-                "eglCreatePbufferFromClientBuffer refused the render texture: " +
-                $"{Egl.DescribeLastError()}. This is the ANGLE build lacking " +
-                "EGL_ANGLE_d3d_texture_client_buffer.");
+                "eglCreatePbufferFromClientBuffer refused the render texture " +
+                $"({description.Format}, {width}x{height}): {Egl.DescribeLastError()}. " +
+                "Either this ANGLE build lacks EGL_ANGLE_d3d_texture_client_buffer, " +
+                "or the texture format does not match the chosen EGL config.");
         }
 
         _surfaceWidth = width;

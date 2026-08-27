@@ -281,10 +281,15 @@ public sealed class PlayerViewModel : ObservableBase, IDisposable
     /// missing GPU path work again, and ordinary playback snapshots would
     /// otherwise clear the message within milliseconds.
     /// </remarks>
-    public void ReportRenderFailure(string message)
+    public void ReportRenderFailure(string message, string? logPath = null)
     {
-        _renderFailure = message;
-        ErrorMessage = message;
+        // The path goes in the message rather than into a separate control: the
+        // person who needs it is reading this card, and telling them a log
+        // exists without saying where is worse than not mentioning it.
+        _renderFailure = logPath is null
+            ? message
+            : $"{message}\n\nFull details: {logPath}";
+        ErrorMessage = _renderFailure;
         ErrorVisibility = Visibility.Visible;
         EmptyStateVisibility = Visibility.Collapsed;
         TransportVisibility = Visibility.Collapsed;

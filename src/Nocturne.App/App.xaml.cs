@@ -1,4 +1,5 @@
 using Microsoft.UI.Xaml;
+using Nocturne.App.Services;
 using Nocturne.App.Views;
 
 namespace Nocturne.App;
@@ -19,9 +20,21 @@ public partial class App : Application
         UnhandledException += OnUnhandledException;
     }
 
+    /// <summary>Where settings and logs live.</summary>
+    internal static string DataDirectory { get; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "Nocturne");
+
     /// <inheritdoc />
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
+        // Before anything that can fail. The render pipeline has six stages that
+        // each fail for unrelated reasons, and the log is the only way to learn
+        // which one stopped on a machine nobody here can reach.
+        DiagnosticLog.Start(
+            Path.Combine(DataDirectory, "logs"),
+            typeof(App).Assembly.GetName().Version?.ToString() ?? "unknown");
+
         _window = new MainWindow();
         _window.Activate();
 
@@ -59,8 +72,9 @@ public partial class App : Application
     private void OnUnhandledException(object sender, Microsoft.UI.Xaml.UnhandledExceptionEventArgs e)
     {
         // Leave Handled false: crashing loudly with a real stack is more useful
-        // than continuing in a state the app cannot describe. The message is
-        // written first so a crash dump is not the only record.
+        // than continuing in a state the app cannot describe. Written to the log
+        // first so a crash dump is not the only record.
+        DiagnosticLog.Current.WriteException("unhandled", e.Exception);
         System.Diagnostics.Debug.WriteLine($"Unhandled exception: {e.Exception}");
     }
 }

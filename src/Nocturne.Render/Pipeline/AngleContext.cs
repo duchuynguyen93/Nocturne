@@ -40,9 +40,11 @@ internal sealed unsafe class AngleContext : IDisposable
     /// Creates a context bound to <paramref name="device"/>.
     /// </summary>
     /// <exception cref="RenderInitializationException">ANGLE could not be set up.</exception>
-    internal static AngleContext Create(ID3D11Device device)
+    internal static AngleContext Create(ID3D11Device device, Action<string>? trace = null)
     {
         ArgumentNullException.ThrowIfNull(device);
+
+        void Step(string message) => trace?.Invoke(message);
 
         // Step one: wrap the app's D3D11 device as an EGLDeviceEXT.
         //
@@ -58,6 +60,8 @@ internal sealed unsafe class AngleContext : IDisposable
             device.NativePointer,
             null);
 
+        Step($"eglCreateDeviceANGLE -> 0x{eglDevice:X}");
+
         if (eglDevice == nint.Zero)
         {
             throw new RenderInitializationException(
@@ -71,6 +75,8 @@ internal sealed unsafe class AngleContext : IDisposable
             Egl.EGL_PLATFORM_DEVICE_EXT,
             eglDevice,
             null);
+
+        Step($"eglGetPlatformDisplayEXT(EGL_PLATFORM_DEVICE_EXT) -> 0x{display:X}");
 
         if (display == Egl.EGL_NO_DISPLAY)
         {
@@ -88,6 +94,8 @@ internal sealed unsafe class AngleContext : IDisposable
             throw new RenderInitializationException(
                 $"eglInitialize failed: {Egl.DescribeLastError()}.");
         }
+
+        Step($"eglInitialize -> EGL {major}.{minor}");
 
         int* configAttributes = stackalloc int[]
         {
@@ -123,6 +131,8 @@ internal sealed unsafe class AngleContext : IDisposable
             Egl.EGL_CONTEXT_CLIENT_VERSION, 3,
             Egl.EGL_NONE,
         };
+
+        Step($"eglChooseConfig -> {configCount} config(s)");
 
         nint context = Egl.CreateContext(display, config, Egl.EGL_NO_CONTEXT, contextAttributes);
         if (context == Egl.EGL_NO_CONTEXT)

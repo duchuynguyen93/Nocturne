@@ -4,6 +4,7 @@ using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+using Nocturne.App.Services;
 using Nocturne.App.ViewModels;
 using Nocturne.Core.Media;
 using Nocturne.Core.Playback;
@@ -46,6 +47,17 @@ public sealed partial class MainWindow : Window, IDisposable
         ApplyTitleBarColors();
 
         _engine = new PlayerEngine(EngineOptions.Default);
+
+        // libmpv's own account of what it is doing. When the picture is missing
+        // but the sound is not, this is where the reason appears — the video
+        // output and the hardware decoder both report here.
+        _engine.LogMessage += (_, message) =>
+            DiagnosticLog.Current.Write($"mpv/{message.Level}", $"{message.Prefix}: {message.Text}");
+
+        DiagnosticLog.Current.Write(
+            "engine",
+            $"libmpv client API {PlayerEngine.ApiVersion.Major}.{PlayerEngine.ApiVersion.Minor}");
+
         ViewModel = new PlayerViewModel(_engine, DispatcherQueue);
 
         AttachSliderGestures();
@@ -220,7 +232,10 @@ public sealed partial class MainWindow : Window, IDisposable
     {
         try
         {
-            _renderer = VideoRenderer.Create(_engine!.NativeHandle, width, height);
+            DiagnosticLog.Current.Write("render", $"building pipeline at {width}x{height}");
+            _renderer = VideoRenderer.Create(
+                _engine!.NativeHandle, width, height,
+                step => DiagnosticLog.Current.Write("render", step));
 
             // Hand the swap chain to the panel. This is the join between the
             // Direct3D pipeline and the XAML tree, and it is what allows the
@@ -238,12 +253,17 @@ public sealed partial class MainWindow : Window, IDisposable
             _renderer?.Dispose();
             _renderer = null;
 
-            ViewModel.ReportRenderFailure(ex.Message);
+            DiagnosticLog.Current.WriteException("render", ex);
+            ViewModel.ReportRenderFailure(ex.Message, DiagnosticLog.Current.Path);
         }
     }
 
-    private void OnRenderFailed(object? sender, Exception error) =>
-        DispatcherQueue.TryEnqueue(() => ViewModel.ReportRenderFailure(error.Message));
+    private void OnRenderFailed(object? sender, Exception error)
+    {
+        DiagnosticLog.Current.WriteException("render", error);
+        DispatcherQueue.TryEnqueue(() =>
+            ViewModel.ReportRenderFailure(error.Message, DiagnosticLog.Current.Path));
+    }
 
     private void OnPlayPauseClick(object sender, RoutedEventArgs e) => ViewModel.TogglePlayPause();
 

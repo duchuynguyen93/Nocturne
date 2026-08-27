@@ -100,7 +100,14 @@ public sealed record EngineOptions
     public bool ExclusiveAudio { get; init; }
 
     /// <summary>Minimum libmpv log level forwarded to the app's log.</summary>
-    public string LogLevel { get; init; } = "warn";
+    /// <remarks>
+    /// <c>v</c> rather than <c>warn</c> while the render pipeline is still being
+    /// brought up. The lines that explain a missing picture — which video output
+    /// was chosen, whether the hardware decoder initialized, what the render API
+    /// was handed — are all at verbose level, and libmpv does not repeat them at
+    /// warn. Worth lowering once a frame has actually been drawn.
+    /// </remarks>
+    public string LogLevel { get; init; } = "v";
 
     /// <summary>
     /// Renders the options as the string pairs <c>mpv_set_option_string</c> takes.
