@@ -104,6 +104,7 @@ jobs:
           -p:Platform=${{ matrix.platform }}
           -r win-${{ matrix.platform }}
           --self-contained true
+          -p:InformationalVersion=${{ github.sha }}
           -o artifacts/publish/${{ matrix.platform }}
 
       # The publish output does not pick up native\ through the csproj glob when

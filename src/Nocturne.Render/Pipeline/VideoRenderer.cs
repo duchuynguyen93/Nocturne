@@ -182,6 +182,12 @@ public sealed unsafe class VideoRenderer : IDisposable
 
         Step($"surface {width}x{height}");
 
+        // Before anything is built: say what the native runtime is, and load it
+        // one library at a time with a line on each side. When the process dies
+        // inside a native entry point there is no exception and no stack — the
+        // last line written is the entire diagnosis, so it has to be specific.
+        NativePreflight.Run(Step);
+
         // ANGLE first, and the Direct3D device comes out of it. Which of the two
         // creates the device is decided by what the ANGLE build supports, so the
         // decision cannot be made here; see AngleContext.

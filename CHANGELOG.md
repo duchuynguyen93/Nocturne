@@ -61,6 +61,25 @@ this file is where that distinction is kept honest.
 
 ### Fixed
 
+- The log could not say which build wrote it, and could not say where inside the
+  native runtime a run stopped. Both were costing rounds of guessing paid for by
+  someone installing a build on a machine nobody here can reach.
+
+  `NativePreflight` now runs before the pipeline is built. It names the graphics
+  adapters through DXGI — which does not create a device, so it survives the case
+  where device creation is itself the fault — then loads each native library **by
+  full path, one at a time, with a log line on both sides**. A missing "loaded"
+  line names the library whose entry point killed the process, which is not
+  something the loader reports and not something any `catch` sees. Loading by
+  full path also proves which copy loaded, rather than whichever same-named file
+  `PATH` happened to offer.
+
+  `D3D11CreateDevice` is logged immediately before the call for the same reason:
+  it runs the display driver's own code inside this process.
+
+  Startup now records the informational version, the executable's timestamp and
+  its path. CI stamps the commit into the informational version.
+
 - **The app force-closed on launch.** The previous build was the first in which
   `libEGL.dll` actually loaded — earlier ones failed at `LoadLibrary` with
   `ERROR_BAD_EXE_FORMAT`, which is a managed exception, so the pipeline degraded

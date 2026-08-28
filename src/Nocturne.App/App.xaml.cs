@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Reflection;
 using Microsoft.UI.Xaml;
 using Nocturne.App.Services;
 using Nocturne.App.Views;
@@ -42,6 +44,12 @@ public partial class App : Application
             Path.Combine(DataDirectory, "logs"),
             typeof(App).Assembly.GetName().Version?.ToString() ?? "unknown");
 
+        // Which build produced this log. A report that stops mid-way is only
+        // useful if it is known which code was running, and asking the person on
+        // the far end whether they installed the latest installer is not an
+        // answer anyone should have to rely on.
+        DiagnosticLog.Current.Write("nocturne", $"Build: {DescribeBuild()}");
+
         // Read before the window exists, because the window is what starts the
         // attempt this is guarding.
         RenderGuard.Initialize(DataDirectory);
@@ -85,6 +93,27 @@ public partial class App : Application
         }
 
         return null;
+    }
+
+    /// <summary>Identifies the running build beyond its version number.</summary>
+    /// <remarks>
+    /// The assembly version is set by hand and rarely moves, so on its own it
+    /// cannot tell two builds apart. The informational version carries the
+    /// commit when CI stamps it, and the executable's timestamp answers the
+    /// question even when nothing stamped anything.
+    /// </remarks>
+    private static string DescribeBuild()
+    {
+        string informational = typeof(App).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+            .InformationalVersion ?? "unstamped";
+
+        string? location = Environment.ProcessPath;
+        string written = location is not null && File.Exists(location)
+            ? File.GetLastWriteTimeUtc(location).ToString("u", CultureInfo.InvariantCulture)
+            : "unknown";
+
+        return $"{informational}, exe written {written} UTC, {location ?? "unknown path"}";
     }
 
     /// <summary>

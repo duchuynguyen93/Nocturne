@@ -191,7 +191,7 @@ internal sealed unsafe class AngleContext : IDisposable
     {
         void Step(string message) => trace?.Invoke(message);
 
-        ID3D11Device device = CreateHardwareDevice();
+        ID3D11Device device = CreateHardwareDevice(Step);
         Step($"D3D11 device created by the app, feature level {device.FeatureLevel}");
 
         nint eglDevice = nint.Zero;
@@ -412,7 +412,7 @@ internal sealed unsafe class AngleContext : IDisposable
     }
 
     /// <summary>Creates a hardware Direct3D 11 device for the app to own.</summary>
-    private static ID3D11Device CreateHardwareDevice()
+    private static ID3D11Device CreateHardwareDevice(Action<string> step)
     {
         // BgraSupport is required by the composition swap chain; VideoSupport is
         // required by d3d11va, which is the decoder the whole zero-copy path
@@ -425,6 +425,12 @@ internal sealed unsafe class AngleContext : IDisposable
             FeatureLevel.Level_11_1,
             FeatureLevel.Level_11_0,
         ];
+
+        // Logged immediately before the call, not after. D3D11CreateDevice runs
+        // the display driver's own code in this process, and a driver that
+        // faults there takes the process with it — leaving this line as the last
+        // thing written.
+        step("calling D3D11CreateDevice (hardware, BGRA + video support)");
 
         var result = D3D11.D3D11CreateDevice(
             adapter: null,
