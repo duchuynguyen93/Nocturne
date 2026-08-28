@@ -167,13 +167,20 @@ Recorded so nobody spends the download again.
 The whole Chromium family is out permanently: static linking is the direction that
 ecosystem has moved in, and it is not going to reverse.
 
-### Risk 2 — orientation
+### Risk 2 — orientation (resolved 2026-08-29)
 
-GL's framebuffer origin is bottom-left; Direct3D's is top-left. `RenderFrame`
-passes `MPV_RENDER_PARAM_FLIP_Y` with a value of 1. If the first frame that ever
-renders is upside down, this is the flag, and the fix is one character. It is
-called out here because an inverted picture looks like a catastrophic pipeline
-failure and is not one.
+GL's framebuffer origin is bottom-left; Direct3D's is top-left, so the reasoning
+goes that something has to flip. Something does, and it is not libmpv.
+
+The surface is a pbuffer wrapping a D3D11 texture, and ANGLE's Direct3D backend
+already inverts the viewport as part of translating GL to Direct3D. The texture
+therefore arrives in Direct3D's orientation with no help. `RenderFrame` shipped
+`MPV_RENDER_PARAM_FLIP_Y = 1` on top of that, which applied the correction twice,
+and the first frame this project ever drew was upside down. It is now `0`.
+
+The general shape is worth keeping in mind for the rest of this file: a
+correction that is obviously necessary in the abstract may already have been
+applied by a layer in between.
 
 ### Risk 3 — HDR is not wired up
 

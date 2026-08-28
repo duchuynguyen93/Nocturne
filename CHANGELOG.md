@@ -61,6 +61,12 @@ this file is where that distinction is kept honest.
 
 ### Fixed
 
+- **The picture is the right way up.** The first frame this project ever rendered
+  was upside down. `MPV_RENDER_PARAM_FLIP_Y` was set to 1 on the reasoning that
+  GL's origin is bottom-left and Direct3D's is top-left — but the surface is a
+  pbuffer wrapping a D3D11 texture, and ANGLE's Direct3D backend already inverts
+  the viewport when it translates GL. The correction was being applied twice.
+
 - **The player can load its renderer.** `libGLESv2.dll` imports `zlib1.dll`,
   which is an MSYS2 library and is not present on Windows, and it was never
   shipped. `LoadLibrary` failed on it every time.

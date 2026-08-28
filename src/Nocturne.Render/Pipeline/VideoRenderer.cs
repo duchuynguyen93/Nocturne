@@ -410,10 +410,17 @@ public sealed unsafe class VideoRenderer : IDisposable
             InternalFormat = Egl.GL_RGBA8,
         };
 
-        // GL's origin is bottom-left and Direct3D's is top-left. Asking libmpv to
-        // flip is cheaper than a second blit, and it is the flag to revisit first
-        // if the picture appears upside down.
-        int flipY = 1;
+        // Zero, and the reasoning that says otherwise is a trap worth stating.
+        //
+        // GL's framebuffer origin is bottom-left and Direct3D's is top-left, so
+        // the obvious conclusion is that something must flip. Something does —
+        // ANGLE. The surface here is a pbuffer wrapping a D3D11 texture, and
+        // ANGLE's D3D backend already inverts the viewport when it translates
+        // GL into Direct3D, so the texture comes out in Direct3D's orientation
+        // with no help. Asking libmpv to flip as well applies the correction
+        // twice, which is exactly once too many: the first build that ever drew
+        // a frame drew it upside down.
+        int flipY = 0;
 
         MpvRenderParam* parameters = stackalloc MpvRenderParam[3];
         parameters[0] = new MpvRenderParam
