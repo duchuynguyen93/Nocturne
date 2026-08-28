@@ -1,10 +1,20 @@
 name: Build
 
+# Runner Windows tính gấp đôi phút, và repo này là private — nên mỗi lần đẩy
+# tài liệu mà quay cả pipeline là tiêu tiền cho không gì cả.
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
+      - 'LICENSE'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
   workflow_dispatch:
 
 permissions:
@@ -171,22 +181,12 @@ jobs:
             "artifacts/installer/*.exe" `
             "artifacts/nocturne-${{ matrix.platform }}-portable.zip"
 
-  # Separate from the build so a formatting nit never stands between a change
-  # and a downloadable artifact.
-  formatting:
-    name: Formatting
-    runs-on: windows-latest
-    timeout-minutes: 20
-
-    steps:
-      - name: Check out source
-        uses: actions/checkout@v4
-
-      - name: Install .NET SDK
-        uses: actions/setup-dotnet@v4
-        with:
-          global-json-file: global.json
-
+      # Deliberately the last step, and deliberately in this job rather than its
+      # own. Formatting needs the WinUI toolchain, so a separate job means a
+      # second Windows runner — billed at twice the rate of Linux — for a check
+      # that has never once been the reason a build was wrong. Running it after
+      # the release keeps the original property that a formatting nit cannot
+      # stand between a change and a downloadable installer.
       - name: Verify formatting
         shell: pwsh
         run: dotnet format Nocturne.sln --verify-no-changes --severity error
