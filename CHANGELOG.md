@@ -13,6 +13,12 @@ this file is where that distinction is kept honest.
 
 ### Added
 
+- Double-clicking the picture enters and leaves full screen, alongside `F11` and
+  the transport-bar button. The gesture is carried by a transparent sheet over
+  the video only, so a double-click on the transport bar does nothing — rather
+  than the handler having to guess from `OriginalSource` which controls should be
+  exempt.
+
 - Initial repository: four projects with an enforced dependency direction, and a
   CI pipeline that produces a downloadable Windows installer.
 

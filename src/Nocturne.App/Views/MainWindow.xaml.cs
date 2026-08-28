@@ -313,6 +313,20 @@ public sealed partial class MainWindow : Window, IDisposable
 
     private void OnFullScreenClick(object sender, RoutedEventArgs e) => ToggleFullScreen();
 
+    /// <summary>
+    /// Double-clicking the picture enters and leaves full screen.
+    /// </summary>
+    /// <remarks>
+    /// Every video player does this, so people arrive already expecting it and
+    /// try it before looking for a button. Marked handled so the gesture does
+    /// not also reach the window, where a double-click means maximize.
+    /// </remarks>
+    private void OnVideoDoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
+    {
+        ToggleFullScreen();
+        e.Handled = true;
+    }
+
     private void OnSeekBarPointerPressed(object sender, PointerRoutedEventArgs e) => ViewModel.BeginScrub();
 
     private void OnSeekBarPointerReleased(object sender, PointerRoutedEventArgs e) =>

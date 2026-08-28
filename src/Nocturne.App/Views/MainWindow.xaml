@@ -47,6 +47,26 @@
             -->
             <SwapChainPanel x:Name="VideoPanel" SizeChanged="OnVideoPanelSizeChanged" />
 
+            <!--
+              A transparent sheet over the picture, and nothing else, so that a
+              double-click on the video toggles full screen while a double-click
+              on the transport bar does not.
+
+              It is a separate element rather than a handler on the panel or on
+              the row, because either of those gets the answer wrong. A
+              SwapChainPanel with no Background is not hit-testable, and giving it
+              one puts a brush over the surface libmpv draws into. Handling the
+              event on the row instead would catch taps on the transport bar too,
+              since those bubble through it — leaving the code to guess from
+              OriginalSource which controls should be exempt. Here the question
+              never arises: anything hit-testable above this sheet takes the
+              event, and anything that is not lets it through.
+            -->
+            <Grid
+                x:Name="VideoInputLayer"
+                Background="Transparent"
+                DoubleTapped="OnVideoDoubleTapped" />
+
             <!-- Empty state, shown until a file is open. -->
             <StackPanel
                 x:Name="EmptyState"
