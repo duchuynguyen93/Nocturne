@@ -109,7 +109,13 @@ jobs:
           # A publish missing any of these builds and installs cleanly and then
           # cannot draw a frame. Checking here beats finding out on a user's
           # machine with a message about a missing DLL.
-          $required = @('libmpv-2.dll', 'libEGL.dll', 'libGLESv2.dll')
+          # ANGLE's mingw runtime is listed here too. Omitting it produced a
+          # build that installed cleanly and then failed to load libEGL with
+          # ERROR_BAD_EXE_FORMAT, because Windows fell back to whatever
+          # same-named library the machine happened to have on PATH.
+          $required = @(
+            'libmpv-2.dll', 'libEGL.dll', 'libGLESv2.dll',
+            'libgcc_s_seh-1.dll', 'libstdc++-6.dll', 'libwinpthread-1.dll')
           $dest = "artifacts/publish/${{ matrix.platform }}"
           $absent = $required | Where-Object { -not (Test-Path (Join-Path $dest $_)) }
           if ($absent) { throw "Publish is missing: $($absent -join ', ')" }

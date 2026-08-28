@@ -8,6 +8,9 @@
       libmpv-2.dll            the player core (FFmpeg, libplacebo, libass)
       libEGL.dll              ANGLE, the OpenGL ES to Direct3D 11 translator
       libGLESv2.dll
+      libgcc_s_seh-1.dll      mingw runtime that ANGLE's build links against
+      libstdc++-6.dll
+      libwinpthread-1.dll
 
     libmpv is fetched automatically from the shinchiro build of mpv, which is
     the de facto official Windows distribution.
@@ -18,10 +21,11 @@
     resulting GL entry points through the render API — but the DLLs still have to
     come from somewhere.
 
-    They are fetched from the MSYS2 mingw64 'angleproject' package. Two other
-    sources were tried and rejected: current Electron and Chrome build ANGLE
-    statically into the main binary and ship no libEGL.dll at all, and Qt 5's
-    bundled ANGLE is far too old to carry the extensions this code needs.
+    They are fetched from the MSYS2 mingw64 'angleproject' package, along with
+    the three mingw runtime libraries that build links against. Two other sources
+    were tried and rejected: current Electron and Chrome build ANGLE statically
+    into the main binary and ship no libEGL.dll at all, and Qt 5's bundled ANGLE
+    is far too old to carry the extensions this code needs.
 
     Nothing this script downloads is committed; native\ is git-ignored.
 
@@ -134,8 +138,24 @@ GitHub-hosted Windows runners already have it.
 # Pinned rather than "latest": ANGLE is the one dependency whose exact build
 # decides whether the render pipeline works at all, so an unannounced upgrade
 # must never arrive silently with an ordinary CI run.
-$anglePackage = 'mingw-w64-x86_64-angleproject-2.1.r25748.890b5d8f-4-any.pkg.tar.zst'
-$angleFiles = @('libEGL.dll', 'libGLESv2.dll')
+#
+# The MSYS2 build is compiled with GCC, so libEGL.dll and libGLESv2.dll import
+# three mingw runtime libraries. They are NOT optional: without them beside the
+# executable Windows searches PATH, and if it finds a same-named library from
+# some other toolchain — a 32-bit MinGW, an older MSYS2 — LoadLibrary fails with
+# ERROR_BAD_EXE_FORMAT (0x8007000B), which reads as "incorrect format" and looks
+# nothing like a missing dependency. Shipping them makes the app's own directory
+# win the search and removes the machine's PATH from the equation entirely.
+$anglePackages = @(
+    @{ Package = 'mingw-w64-x86_64-angleproject-2.1.r25748.890b5d8f-4-any.pkg.tar.zst'
+       Files   = @('libEGL.dll', 'libGLESv2.dll') }
+    @{ Package = 'mingw-w64-x86_64-gcc-libs-16.2.0-3-any.pkg.tar.zst'
+       Files   = @('libgcc_s_seh-1.dll', 'libstdc++-6.dll') }
+    @{ Package = 'mingw-w64-x86_64-libwinpthread-git-12.0.0.r747.g1a99f8514-1-any.pkg.tar.zst'
+       Files   = @('libwinpthread-1.dll') }
+)
+
+$angleFiles = @($anglePackages | ForEach-Object { $_.Files } | ForEach-Object { $_ })
 
 if ($AnglePath) {
     foreach ($name in $angleFiles) {
@@ -150,9 +170,9 @@ if ($AnglePath) {
 } elseif ($Architecture -ne 'x64') {
     Write-Warning "The MSYS2 ANGLE package is x64 only. Supply -AnglePath for $Architecture."
 } else {
-    # @() bắt buộc: dưới Set-StrictMode, Where-Object trả về $null khi không khớp
-    # gì và trả về một phần tử đơn lẻ khi khớp đúng một — cả hai đều không có
-    # thuộc tính Count, và script sẽ chết ngay dòng dưới.
+    # @() is required: under Set-StrictMode, Where-Object yields $null when
+    # nothing matches and a bare object when exactly one does. Neither has a
+    # Count property, and the line below would throw on a clean machine.
     $present = @($angleFiles | Where-Object { Test-Path (Join-Path $targetDir $_) })
     if ($present.Count -eq $angleFiles.Count -and -not $Force) {
         Write-Host "ANGLE already present. Use -Force to re-download."
@@ -162,42 +182,52 @@ if ($AnglePath) {
             throw '7z is required to unpack the ANGLE package and was not found on PATH.'
         }
 
-        $archive = Join-Path ([System.IO.Path]::GetTempPath()) $anglePackage
-        Write-Host "Downloading $anglePackage"
-        Invoke-WebRequest -Uri "https://repo.msys2.org/mingw/mingw64/$anglePackage" `
-            -OutFile $archive -UseBasicParsing
+        foreach ($spec in $anglePackages) {
+            $package = $spec.Package
+            $archive = Join-Path ([System.IO.Path]::GetTempPath()) $package
+            Write-Host "Downloading $package"
+            Invoke-WebRequest -Uri "https://repo.msys2.org/mingw/mingw64/$package" `
+                -OutFile $archive -UseBasicParsing
 
-        $extractDir = Join-Path ([System.IO.Path]::GetTempPath()) 'nocturne-angle'
-        if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
+            $extractDir = Join-Path ([System.IO.Path]::GetTempPath()) 'nocturne-msys2'
+            if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
 
-        # Two passes: .tar.zst decompresses to .tar, which then unpacks. Windows'
-        # own tar cannot be relied on to read zstd.
-        & 7z x $archive "-o$extractDir" -y | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "7z exited with $LASTEXITCODE unpacking zstd." }
+            # Two passes: .tar.zst decompresses to .tar, which then unpacks.
+            # Windows' own tar cannot be relied on to read zstd.
+            & 7z x $archive "-o$extractDir" -y | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "7z exited with $LASTEXITCODE unpacking zstd." }
 
-        $tarFile = Get-ChildItem -Path $extractDir -Filter '*.tar' | Select-Object -First 1
-        if (-not $tarFile) { throw 'The ANGLE package did not contain a tar archive.' }
+            $tarFile = Get-ChildItem -Path $extractDir -Filter '*.tar' | Select-Object -First 1
+            if (-not $tarFile) { throw "$package did not contain a tar archive." }
 
-        & 7z x $tarFile.FullName "-o$extractDir" -y | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "7z exited with $LASTEXITCODE unpacking tar." }
+            & 7z x $tarFile.FullName "-o$extractDir" -y | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "7z exited with $LASTEXITCODE unpacking tar." }
 
-        foreach ($name in $angleFiles) {
-            $found = Get-ChildItem -Path $extractDir -Filter $name -Recurse |
-                Where-Object { $_.FullName -notmatch 'vulkan_secondaries|with_capture' } |
-                Select-Object -First 1
-            if (-not $found) { throw "$name was not in the ANGLE package." }
+            foreach ($name in $spec.Files) {
+                # Restricted to bin\: the same packages carry import libraries
+                # under lib\ whose names differ only by a .a suffix, and the
+                # Windows file matcher behind -Filter can match those too.
+                $found = Get-ChildItem -Path $extractDir -Filter $name -Recurse |
+                    Where-Object {
+                        $_.Extension -eq '.dll' -and
+                        $_.DirectoryName -match '\\bin$' -and
+                        $_.FullName -notmatch 'vulkan_secondaries|with_capture'
+                    } |
+                    Select-Object -First 1
+                if (-not $found) { throw "$name was not in $package." }
 
-            Copy-Item $found.FullName (Join-Path $targetDir $name) -Force
-            Write-Host "Placed $(Join-Path $targetDir $name)"
+                Copy-Item $found.FullName (Join-Path $targetDir $name) -Force
+                Write-Host "Placed $(Join-Path $targetDir $name)"
+            }
+
+            Remove-Item $archive -Force
+            Remove-Item $extractDir -Recurse -Force
         }
-
-        Remove-Item $archive -Force
-        Remove-Item $extractDir -Recurse -Force
     }
 }
 
-$missing = @('libmpv-2.dll', 'libEGL.dll', 'libGLESv2.dll') |
-    Where-Object { -not (Test-Path (Join-Path $targetDir $_)) }
+$missing = @(@('libmpv-2.dll') + $angleFiles |
+    Where-Object { -not (Test-Path (Join-Path $targetDir $_)) })
 
 if ($missing) {
     Write-Warning "Still missing from $targetDir : $($missing -join ', ')"
