@@ -187,6 +187,45 @@ error:
 `MpvClient` uses a reader/writer lock over the handle's lifetime so that
 disposal waits for in-flight calls rather than freeing the handle under them.
 
+## 5a. Who creates the Direct3D device
+
+There is one device. There are two ways to arrive at it, and which one runs is
+decided at startup by what the ANGLE build reports it can do.
+
+**Adoption (preferred).** The app calls `D3D11CreateDevice`, wraps the result
+with `eglCreateDeviceANGLE`, and builds the display on it through
+`EGL_PLATFORM_DEVICE_EXT`. The app chooses the feature level and the creation
+flags, which is why it is preferred. It requires
+`EGL_ANGLE_device_creation_d3d11` and `EGL_EXT_platform_device`.
+
+**Borrowing (fallback).** The app builds an ordinary ANGLE display with
+`EGL_PLATFORM_ANGLE_ANGLE` / `EGL_PLATFORM_ANGLE_TYPE_D3D11_ANGLE`, then reads
+the device back out with `eglQueryDisplayAttribEXT(EGL_DEVICE_EXT)` followed by
+`eglQueryDeviceAttribEXT(EGL_D3D11_DEVICE_ANGLE)`, adds a reference, and uses
+that. This is how every ordinary ANGLE consumer works, so it is available on any
+build with the D3D11 backend at all.
+
+Both end on one device, which is the property §2 depends on. What must never
+happen is *two* devices — every frame would then need a shared handle and a keyed
+mutex, and that wait lands inside the presentation interval.
+
+### The extension string is checked first, and this is not optional
+
+ANGLE exports its extension entry points unconditionally. An entry point whose
+backend was not compiled into that build does not return an error: it reaches an
+`UNREACHABLE()` and calls `abort()`. That is not an exception. No `catch` runs,
+no dialog appears, and the process is gone before its window is drawn — which is
+exactly what the first build to successfully load `libEGL.dll` did.
+
+So `AngleContext.Create` reads `eglQueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS)`
+before touching anything else, and only calls what that string advertises.
+
+`RenderGuard` is the belt to that braces: the attempt is bracketed by a marker
+file in `%LOCALAPPDATA%\Nocturne\`, written before the first native call and
+deleted after. Finding it at the next startup means the previous run did not
+survive, so video is skipped and the app opens without it. Installing a build
+clears the marker, because a new build deserves a fresh attempt.
+
 ## 6. The invariant that is easy to lose
 
 `mpv_render_context_report_swap` must be called after every `Present`. libmpv

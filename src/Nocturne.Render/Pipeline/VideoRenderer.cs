@@ -2,7 +2,6 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Nocturne.Engine.Interop;
 using Nocturne.Render.Interop;
-using Vortice.Direct3D;
 using Vortice.Direct3D11;
 using Vortice.DXGI;
 
@@ -46,7 +45,9 @@ public sealed unsafe class VideoRenderer : IDisposable
     private readonly object _resizeLock = new();
     private readonly Thread _renderThread;
 
+    /// <summary>Borrowed from <see cref="_angle"/>, which owns and disposes it.</summary>
     private ID3D11Device _device = null!;
+
     private ID3D11DeviceContext _deviceContext = null!;
     private IDXGISwapChain1 _swapChain = null!;
     private ID3D11Texture2D? _renderTexture;
@@ -181,14 +182,15 @@ public sealed unsafe class VideoRenderer : IDisposable
 
         Step($"surface {width}x{height}");
 
-        CreateDevice();
-        Step($"D3D11 device created, feature level {_device.FeatureLevel}");
+        // ANGLE first, and the Direct3D device comes out of it. Which of the two
+        // creates the device is decided by what the ANGLE build supports, so the
+        // decision cannot be made here; see AngleContext.
+        _angle = AngleContext.Create(trace);
+        _device = _angle.Device;
+        _deviceContext = _device.ImmediateContext;
 
         CreateSwapChain(width, height);
         Step("composition swap chain created");
-
-        _angle = AngleContext.Create(_device, trace);
-        Step("ANGLE context created");
 
         CreateRenderSurface(width, height);
         Step("render texture wrapped as an EGL pbuffer");
@@ -203,60 +205,6 @@ public sealed unsafe class VideoRenderer : IDisposable
         Step("mpv render context created");
 
         _angle.ClearCurrent();
-    }
-
-    private void CreateDevice()
-    {
-        DeviceCreationFlags flags = DeviceCreationFlags.BgraSupport | DeviceCreationFlags.VideoSupport;
-#if DEBUG
-        // The debug layer is what turns a silent black frame into a named
-        // reason. It is absent on machines without the Graphics Tools feature,
-        // so a failure here retries without it rather than refusing to start.
-        flags |= DeviceCreationFlags.Debug;
-#endif
-
-        FeatureLevel[] featureLevels =
-        [
-            FeatureLevel.Level_11_1,
-            FeatureLevel.Level_11_0,
-        ];
-
-        var result = D3D11.D3D11CreateDevice(
-            adapter: null,
-            DriverType.Hardware,
-            flags,
-            featureLevels,
-            out ID3D11Device? device,
-            out _,
-            out ID3D11DeviceContext? context);
-
-        if (result.Failure)
-        {
-#if DEBUG
-            result = D3D11.D3D11CreateDevice(
-                adapter: null,
-                DriverType.Hardware,
-                DeviceCreationFlags.BgraSupport | DeviceCreationFlags.VideoSupport,
-                featureLevels,
-                out device,
-                out _,
-                out context);
-#endif
-            if (result.Failure)
-            {
-                throw new RenderInitializationException(
-                    $"D3D11CreateDevice failed with {result}. The machine has no Direct3D 11 " +
-                    "capable adapter, or the adapter is in a removed state.");
-            }
-        }
-
-        _device = device!;
-        _deviceContext = context!;
-
-        // Direct3D serialises calls from multiple threads only when told to. The
-        // UI thread and the render thread both touch this device.
-        using ID3D11Multithread multithread = _device.QueryInterface<ID3D11Multithread>();
-        multithread.SetMultithreadProtected(true);
     }
 
     private void CreateSwapChain(int width, int height)
@@ -667,11 +615,14 @@ public sealed unsafe class VideoRenderer : IDisposable
             _eglSurface = Egl.EGL_NO_SURFACE;
         }
 
-        _angle?.Dispose();
+        // The ANGLE context owns the Direct3D device, so it goes last: everything
+        // above holds Direct3D objects that must be released while the device
+        // they came from is still alive. _device itself is not disposed here —
+        // it is borrowed, and AngleContext.Dispose releases it.
         _renderTexture?.Dispose();
         _swapChain?.Dispose();
         _deviceContext?.Dispose();
-        _device?.Dispose();
+        _angle?.Dispose();
 
         _frameAvailable.Dispose();
         _cancellation.Dispose();

@@ -61,6 +61,13 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"
 
+[InstallDelete]
+; The crash marker written by RenderGuard. Installing a new build is the one
+; moment where "the video pipeline killed the process last time" stops being
+; evidence about this build, so the app must be allowed to try again — otherwise
+; the fix ships and the app still refuses to draw.
+Type: files; Name: "{localappdata}\{#AppName}\render-attempt.marker"
+
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 

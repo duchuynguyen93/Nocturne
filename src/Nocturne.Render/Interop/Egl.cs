@@ -37,6 +37,10 @@ internal static unsafe class Egl
 
     internal const int EGL_SUCCESS = 0x3000;
 
+    internal const int EGL_VENDOR = 0x3053;
+    internal const int EGL_VERSION = 0x3054;
+    internal const int EGL_EXTENSIONS = 0x3055;
+
     internal const int EGL_ALPHA_SIZE = 0x3021;
     internal const int EGL_BLUE_SIZE = 0x3022;
     internal const int EGL_GREEN_SIZE = 0x3023;
@@ -91,6 +95,15 @@ internal static unsafe class Egl
     /// <summary>Client buffer type naming a D3D11 texture.</summary>
     internal const int EGL_D3D_TEXTURE_ANGLE = 0x33A3;
 
+    /// <summary>Queries the <c>EGLDeviceEXT</c> behind a display.</summary>
+    /// <remarks>
+    /// From <c>EGL_EXT_device_query</c>. This is the route used when ANGLE
+    /// creates the Direct3D device rather than adopting one of ours: ask the
+    /// display which device it built itself on, then ask that device for the
+    /// underlying <c>ID3D11Device</c>.
+    /// </remarks>
+    internal const int EGL_DEVICE_EXT = 0x322C;
+
     internal const int GL_FRAMEBUFFER_BINDING = 0x8CA6;
     internal const int GL_RGBA8 = 0x8058;
     internal const int GL_RGB10_A2 = 0x8059;
@@ -100,6 +113,30 @@ internal static unsafe class Egl
 
     [DllImport(EglLibrary, EntryPoint = "eglGetProcAddress")]
     internal static extern nint GetProcAddress(byte* procName);
+
+    /// <summary>
+    /// Reads one of EGL's descriptive strings.
+    /// </summary>
+    /// <remarks>
+    /// Called with <see cref="EGL_NO_DISPLAY"/> it returns the <em>client</em>
+    /// extension string — the set of entry points usable before any display
+    /// exists. That query is the only supported way to find out whether
+    /// <c>eglCreateDeviceANGLE</c> may be called at all, and calling an ANGLE
+    /// extension the build does not implement is not a graceful failure: it
+    /// reaches an <c>UNREACHABLE()</c> and aborts the process.
+    /// </remarks>
+    [DllImport(EglLibrary, EntryPoint = "eglQueryString")]
+    internal static extern byte* QueryStringRaw(nint display, int name);
+
+    /// <summary>Reads an attribute of an initialized display.</summary>
+    /// <remarks>From <c>EGL_EXT_device_query</c>.</remarks>
+    [DllImport(EglLibrary, EntryPoint = "eglQueryDisplayAttribEXT")]
+    internal static extern int QueryDisplayAttrib(nint display, int attribute, nint* value);
+
+    /// <summary>Reads an attribute of an <c>EGLDeviceEXT</c>.</summary>
+    /// <remarks>From <c>EGL_EXT_device_query</c>.</remarks>
+    [DllImport(EglLibrary, EntryPoint = "eglQueryDeviceAttribEXT")]
+    internal static extern int QueryDeviceAttrib(nint device, int attribute, nint* value);
 
     /// <summary>
     /// Builds a display for a platform-specific native display handle.
@@ -175,6 +212,53 @@ internal static unsafe class Egl
 
     [DllImport(GlesLibrary, EntryPoint = "glGetIntegerv")]
     internal static extern void GetIntegerV(int name, int* values);
+
+    /// <summary>
+    /// Reads an EGL string as managed text, or null when EGL returned nothing.
+    /// </summary>
+    internal static string? QueryString(nint display, int name)
+    {
+        byte* raw = QueryStringRaw(display, name);
+        return raw is null ? null : Marshal.PtrToStringAnsi((nint)raw);
+    }
+
+    /// <summary>
+    /// Tests whether a space-separated EGL extension list contains a name.
+    /// </summary>
+    /// <remarks>
+    /// Substring matching would be wrong: <c>EGL_ANGLE_device_creation</c> is a
+    /// prefix of <c>EGL_ANGLE_device_creation_d3d11</c>, and the two guard
+    /// different entry points.
+    /// </remarks>
+    internal static bool HasExtension(string? extensions, string name)
+    {
+        if (string.IsNullOrEmpty(extensions))
+        {
+            return false;
+        }
+
+        // Hand-walked rather than String.Split: this runs on the startup path
+        // and the list ANGLE returns is long, so there is no reason to allocate
+        // an array of forty strings to answer one yes-or-no question.
+        int start = 0;
+        while (start < extensions.Length)
+        {
+            int end = extensions.IndexOf(' ', start);
+            if (end < 0)
+            {
+                end = extensions.Length;
+            }
+
+            if (extensions.AsSpan(start, end - start).SequenceEqual(name))
+            {
+                return true;
+            }
+
+            start = end + 1;
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// Turns the last EGL error into a message worth reading.

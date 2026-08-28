@@ -231,9 +231,34 @@ public sealed partial class MainWindow : Window, IDisposable
 
     private void TryCreateRenderer(int width, int height)
     {
+        // A previous run went into the native pipeline and never came out. Going
+        // back in would repeat it, and an app that force-closes on launch cannot
+        // even be used to play sound or to read the log that explains why.
+        if (RenderGuard.PreviousAttemptFailed)
+        {
+            _renderPipelineFailed = true;
+            DiagnosticLog.Current.Write(
+                "render",
+                "skipped: the previous run crashed while building the pipeline");
+
+            ViewModel.ReportRenderFailure(
+                "Video is off for this run because the last attempt to start it crashed. " +
+                "Audio still works. Delete " +
+                (RenderGuard.MarkerPath ?? "the marker file in the Nocturne data folder") +
+                " to try again.",
+                DiagnosticLog.Current.Path);
+            return;
+        }
+
         try
         {
             DiagnosticLog.Current.Write("render", $"building pipeline at {width}x{height}");
+
+            // Bracketing starts here, not around the managed call: what is being
+            // guarded against is the process dying inside Direct3D, ANGLE or
+            // libmpv, where no catch block below will ever run.
+            RenderGuard.BeginAttempt();
+
             _renderer = VideoRenderer.Create(
                 _engine!.NativeHandle, width, height,
                 step => DiagnosticLog.Current.Write("render", step));
@@ -256,6 +281,13 @@ public sealed partial class MainWindow : Window, IDisposable
 
             DiagnosticLog.Current.WriteException("render", ex);
             ViewModel.ReportRenderFailure(ex.Message, DiagnosticLog.Current.Path);
+        }
+        finally
+        {
+            // Reaching this line at all is the thing being recorded. Whether the
+            // pipeline was built or threw is beside the point: an exception means
+            // the process survived, and that is what the next launch needs to know.
+            RenderGuard.EndAttempt();
         }
     }
 

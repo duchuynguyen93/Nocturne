@@ -27,11 +27,16 @@ public sealed class DiagnosticLog
     private static readonly object Gate = new();
 
     private readonly string? _path;
+    private readonly StreamWriter? _writer;
 
-    private DiagnosticLog(string? path) => _path = path;
+    private DiagnosticLog(string? path, StreamWriter? writer)
+    {
+        _path = path;
+        _writer = writer;
+    }
 
     /// <summary>The log for this process. Never null; may be writing nowhere.</summary>
-    public static DiagnosticLog Current { get; private set; } = new(path: null);
+    public static DiagnosticLog Current { get; private set; } = new(path: null, writer: null);
 
     /// <summary>Full path of the file, or null when no file could be opened.</summary>
     public string? Path => _path;
@@ -46,6 +51,7 @@ public sealed class DiagnosticLog
     public static void Start(string directory, string appVersion)
     {
         string? path = null;
+        StreamWriter? writer = null;
         try
         {
             Directory.CreateDirectory(directory);
@@ -56,15 +62,38 @@ public sealed class DiagnosticLog
             // Keep the last few runs and no more. Nobody reads the tenth-oldest
             // log, and an unbounded folder in AppData is a slow leak.
             PruneOldLogs(directory, keep: 5);
+
+            // Held open for the life of the process rather than reopened per
+            // line. libmpv logs at verbose level, so the startup sequence alone
+            // is hundreds of lines, and an open-append-close for each one turns
+            // the diagnostic into the slowest thing in the launch path.
+            //
+            // FileShare.ReadWrite so the file can be read — and sent — while the
+            // app is still running. AutoFlush so each line reaches the operating
+            // system as it is written: the whole purpose here is to survive a
+            // process that is about to be killed without warning, and a buffer
+            // inside that process would go down with it.
+            writer = new StreamWriter(
+                new FileStream(
+                    path,
+                    FileMode.Append,
+                    FileAccess.Write,
+                    FileShare.ReadWrite),
+                Encoding.UTF8)
+            {
+                AutoFlush = true,
+            };
         }
 #pragma warning disable CA1031 // Losing the log must never stop the app.
         catch (Exception)
 #pragma warning restore CA1031
         {
+            writer?.Dispose();
+            writer = null;
             path = null;
         }
 
-        Current = new DiagnosticLog(path);
+        Current = new DiagnosticLog(path, writer);
         Current.Write("nocturne", $"Nocturne {appVersion} starting");
         Current.Write("nocturne", $"OS: {Environment.OSVersion}, {(Environment.Is64BitProcess ? "x64" : "x86")}");
         Current.Write("nocturne", $"Log: {path ?? "(none — could not open a file)"}");
@@ -73,20 +102,22 @@ public sealed class DiagnosticLog
     /// <summary>Writes one line, prefixed with a timestamp and a subsystem tag.</summary>
     public void Write(string source, string message)
     {
-        if (_path is null)
+        if (_writer is null)
         {
             return;
         }
 
         string line = string.Create(
             CultureInfo.InvariantCulture,
-            $"{DateTime.Now:HH:mm:ss.fff}  {source,-14}  {message}{Environment.NewLine}");
+            $"{DateTime.Now:HH:mm:ss.fff}  {source,-14}  {message}");
 
         try
         {
+            // libmpv's event thread, the render thread and the UI thread all
+            // write here.
             lock (Gate)
             {
-                File.AppendAllText(_path, line, Encoding.UTF8);
+                _writer.WriteLine(line);
             }
         }
 #pragma warning disable CA1031 // Same again: a failed write is not worth an exception.

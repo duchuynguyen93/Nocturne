@@ -61,6 +61,46 @@ this file is where that distinction is kept honest.
 
 ### Fixed
 
+- **The app force-closed on launch.** The previous build was the first in which
+  `libEGL.dll` actually loaded — earlier ones failed at `LoadLibrary` with
+  `ERROR_BAD_EXE_FORMAT`, which is a managed exception, so the pipeline degraded
+  to audio and the window stayed up. With the mingw runtime bundled, the whole
+  ANGLE path executed for the first time, and a fault in there is not an
+  exception: it is an `abort()` or an access violation that ends the process
+  before the window appears.
+
+  Three changes, each addressing a different part of that:
+
+  - `AngleContext` now reads the EGL **client extension string before calling any
+    extension entry point**. ANGLE exports its extension functions
+    unconditionally, so a build compiled without the Direct3D 11 backend does not
+    return an error from `eglCreateDeviceANGLE` — it reaches an `UNREACHABLE()`
+    and aborts. Asking first is the only way to find out safely.
+
+  - A **second route to a shared device**. If the ANGLE build cannot adopt a
+    device the app created (`EGL_ANGLE_device_creation_d3d11`), the app now
+    adopts the device ANGLE created instead, via `EGL_PLATFORM_ANGLE_ANGLE` and
+    `EGL_EXT_device_query`. That is ANGLE's ordinary mode of operation and works
+    on every build with the D3D11 backend at all. Either way the pipeline ends up
+    on one device, which is the property the zero-copy frame path rests on.
+
+  - `RenderGuard` **brackets the attempt with a marker file**, so a native crash
+    cannot become a launch loop. Finding the marker at startup means the previous
+    run died inside the pipeline; video is skipped for that run and the app opens,
+    plays audio, and says why. Installing a new build clears the marker.
+
+- Faults on background threads were invisible. `Application.UnhandledException`
+  only observes the UI thread, so an exception escaping the engine's event thread
+  or the render thread ended the process with nothing written anywhere.
+  `AppDomain.CurrentDomain.UnhandledException` now logs it first.
+
+- The diagnostic log held the file open for the life of the process instead of
+  reopening it per line. At the verbose libmpv level the startup sequence alone
+  is several hundred lines, and an open-append-close for each was the slowest
+  thing in the launch path. `AutoFlush` keeps the crash-survivability that the
+  per-line write was there for, since the flush is to the operating system rather
+  than into a buffer that dies with the process.
+
 - Four defects surfaced by the first Windows builds, none of which any amount of
   cross-compilation on the authoring machine could have caught:
   - `PlayerViewModel`'s generated `Timecode` property shadowed the
