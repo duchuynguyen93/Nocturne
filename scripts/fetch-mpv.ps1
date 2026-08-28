@@ -11,6 +11,7 @@
       libgcc_s_seh-1.dll      mingw runtime that ANGLE's build links against
       libstdc++-6.dll
       libwinpthread-1.dll
+      zlib1.dll               imported by libGLESv2 and not present on Windows
 
     libmpv is fetched automatically from the shinchiro build of mpv, which is
     the de facto official Windows distribution.
@@ -139,13 +140,26 @@ GitHub-hosted Windows runners already have it.
 # decides whether the render pipeline works at all, so an unannounced upgrade
 # must never arrive silently with an ordinary CI run.
 #
-# The MSYS2 build is compiled with GCC, so libEGL.dll and libGLESv2.dll import
-# three mingw runtime libraries. They are NOT optional: without them beside the
-# executable Windows searches PATH, and if it finds a same-named library from
-# some other toolchain — a 32-bit MinGW, an older MSYS2 — LoadLibrary fails with
-# ERROR_BAD_EXE_FORMAT (0x8007000B), which reads as "incorrect format" and looks
-# nothing like a missing dependency. Shipping them makes the app's own directory
-# win the search and removes the machine's PATH from the equation entirely.
+# The MSYS2 build is compiled with GCC, so these two DLLs import a set of
+# libraries Windows does not have. Read out of the PE import tables, they are:
+#
+#   libEGL.dll      libgcc_s_seh-1, libwinpthread-1, libstdc++-6
+#   libGLESv2.dll   the same three, plus zlib1
+#
+# None of them is optional, and getting the list wrong does not fail loudly.
+#
+# Omitting the first three produced a build that installed cleanly and then
+# failed to load libEGL with ERROR_BAD_EXE_FORMAT (0x8007000B) — Windows had
+# fallen back to whatever same-named library the machine happened to have on
+# PATH. Shipping them makes the app's own directory win the search and takes
+# the machine's PATH out of the equation.
+#
+# Omitting zlib1 was worse, because libEGL is a 260 KB forwarding shim that does
+# not import libGLESv2 at all — it loads it at the first call. So libEGL loaded
+# perfectly, every check passed, and the process died inside the first EGL call
+# with no exception and nothing in any log. The lesson is in the CI job: every
+# DLL shipped is now actually loaded there, which is the only check that sees
+# this class of fault.
 $anglePackages = @(
     @{ Package = 'mingw-w64-x86_64-angleproject-2.1.r25748.890b5d8f-4-any.pkg.tar.zst'
        Files   = @('libEGL.dll', 'libGLESv2.dll') }
@@ -153,6 +167,8 @@ $anglePackages = @(
        Files   = @('libgcc_s_seh-1.dll', 'libstdc++-6.dll') }
     @{ Package = 'mingw-w64-x86_64-libwinpthread-git-12.0.0.r747.g1a99f8514-1-any.pkg.tar.zst'
        Files   = @('libwinpthread-1.dll') }
+    @{ Package = 'mingw-w64-x86_64-zlib-1.3.2-2-any.pkg.tar.zst'
+       Files   = @('zlib1.dll') }
 )
 
 $angleFiles = @($anglePackages | ForEach-Object { $_.Files } | ForEach-Object { $_ })

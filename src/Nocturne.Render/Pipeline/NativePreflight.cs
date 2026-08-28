@@ -43,10 +43,31 @@ internal static class NativePreflight
         "libgcc_s_seh-1.dll",
         "libwinpthread-1.dll",
         "libstdc++-6.dll",
+        "zlib1.dll",
         "libGLESv2.dll",
         "libEGL.dll",
         "libmpv-2.dll",
     ];
+
+    private const uint LoadWithAlteredSearchPath = 0x00000008;
+
+    /// <summary>
+    /// Loads a library and reports why, in Windows' own terms, if it will not.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="NativeLibrary.TryLoad(string, out nint)"/> answers only yes or
+    /// no, and "no" covers a missing file, a wrong architecture and an
+    /// unsatisfied dependency — which need completely different fixes. This
+    /// route keeps the Win32 code, and <c>126 ERROR_MOD_NOT_FOUND</c> on a file
+    /// that demonstrably exists says "something it imports is missing" in one
+    /// number.
+    /// </remarks>
+    [System.Runtime.InteropServices.DllImport(
+        "kernel32.dll",
+        EntryPoint = "LoadLibraryExW",
+        CharSet = System.Runtime.InteropServices.CharSet.Unicode,
+        SetLastError = true)]
+    private static extern nint LoadLibraryEx(string fileName, nint reserved, uint flags);
 
     /// <summary>
     /// Logs what is present, then loads each library one at a time.
@@ -100,7 +121,12 @@ internal static class NativePreflight
 
         try
         {
-            if (NativeLibrary.TryLoad(path, out nint handle))
+            // LOAD_WITH_ALTERED_SEARCH_PATH so the library's own directory is
+            // searched for its dependencies. That is what makes the copies
+            // shipped beside the executable win over any same-named library
+            // elsewhere on PATH.
+            nint handle = LoadLibraryEx(path, nint.Zero, LoadWithAlteredSearchPath);
+            if (handle != nint.Zero)
             {
                 step($"{name}: loaded at 0x{handle.ToString("X", CultureInfo.InvariantCulture)}");
 
@@ -109,7 +135,15 @@ internal static class NativePreflight
                 return;
             }
 
-            step($"{name}: TryLoad returned false");
+            int error = Marshal.GetLastWin32Error();
+            string reason = error switch
+            {
+                126 => "ERROR_MOD_NOT_FOUND — the file is there, but something it imports is not",
+                193 => "ERROR_BAD_EXE_FORMAT — wrong architecture, or a 32-bit copy won the search",
+                _ => new System.ComponentModel.Win32Exception(error).Message,
+            };
+
+            step($"{name}: FAILED TO LOAD, Win32 {error}: {reason}");
         }
 #pragma warning disable CA1031 // Preflight reports; it never decides.
         catch (Exception error)

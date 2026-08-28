@@ -61,6 +61,30 @@ this file is where that distinction is kept honest.
 
 ### Fixed
 
+- **The player can load its renderer.** `libGLESv2.dll` imports `zlib1.dll`,
+  which is an MSYS2 library and is not present on Windows, and it was never
+  shipped. `LoadLibrary` failed on it every time.
+
+  It presented as a launch crash rather than as a missing dependency because
+  `libEGL.dll` is a 260 KB forwarding shim that does not import `libGLESv2.dll`
+  at all — it loads it at the first EGL call. So `libEGL` loaded cleanly, the
+  installer's file checks all passed, and the process died inside
+  `eglQueryString` with no exception and nothing in any log.
+
+  `zlib1.dll` is now fetched and shipped, which closes the chain: its own imports
+  are `KERNEL32` and `msvcrt` and nothing else.
+
+  The check that would have caught this on the first build is now in CI. It does
+  not test that the files exist — that test passed for three builds while the app
+  could not start. It **loads every shipped library**, in dependency order, on
+  the runner. `LoadLibrary` resolves the whole import table, which is the step
+  that was failing, and it needs no GPU.
+
+- Preflight reports the Win32 error rather than a bare false. `NativeLibrary.TryLoad`
+  answers only yes or no, and "no" covers a missing file, a wrong architecture and
+  an unsatisfied dependency — three different fixes. `126 ERROR_MOD_NOT_FOUND` on a
+  file that demonstrably exists names the whole problem in one number.
+
 - The log could not say which build wrote it, and could not say where inside the
   native runtime a run stopped. Both were costing rounds of guessing paid for by
   someone installing a build on a machine nobody here can reach.

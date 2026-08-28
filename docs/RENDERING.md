@@ -130,6 +130,28 @@ embed via `--wid`, compose the two visuals with DirectComposition, and give up
 translucent XAML over the video. That is an architectural retreat and belongs in
 a superseding ADR, not a quiet patch.
 
+### What the ANGLE runtime actually needs (settled 2026-08-29)
+
+Seven native DLLs ship beside the executable. The mingw ones are not incidental —
+they are read straight out of the PE import tables:
+
+| Library | Imports that Windows does not provide |
+| --- | --- |
+| `libEGL.dll` (260 KB) | `libgcc_s_seh-1`, `libwinpthread-1`, `libstdc++-6` |
+| `libGLESv2.dll` (11.6 MB) | the same three, **plus `zlib1`** |
+| `zlib1.dll` | none — `KERNEL32` and `msvcrt` only, so the chain closes here |
+
+`libEGL.dll` is a forwarding shim. It does **not** import `libGLESv2.dll`; it
+loads it at the first EGL call. That single fact is why a missing `zlib1.dll`
+presented the way it did: `libEGL` loaded perfectly, every file check passed, and
+the process died inside `eglQueryString` with no exception, no dialog and nothing
+written by any handler. Three builds shipped that way.
+
+The check that catches this is in CI, and it is not a file-existence check —
+every shipped library is actually `LoadLibrary`'d there, in dependency order.
+`LoadLibrary` resolves the whole import table, which is the step that was
+failing, and it needs no GPU.
+
 ### Sources of ANGLE that do not work (checked, 2026-08-29)
 
 Recorded so nobody spends the download again.

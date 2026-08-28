@@ -125,12 +125,47 @@ jobs:
           # ERROR_BAD_EXE_FORMAT, because Windows fell back to whatever
           # same-named library the machine happened to have on PATH.
           $required = @(
-            'libmpv-2.dll', 'libEGL.dll', 'libGLESv2.dll',
-            'libgcc_s_seh-1.dll', 'libstdc++-6.dll', 'libwinpthread-1.dll')
+            'libgcc_s_seh-1.dll', 'libwinpthread-1.dll', 'libstdc++-6.dll',
+            'zlib1.dll', 'libGLESv2.dll', 'libEGL.dll', 'libmpv-2.dll')
           $dest = "artifacts/publish/${{ matrix.platform }}"
           $absent = $required | Where-Object { -not (Test-Path (Join-Path $dest $_)) }
           if ($absent) { throw "Publish is missing: $($absent -join ', ')" }
           $required | ForEach-Object { Write-Host "native: $_" }
+
+      # The check above only proves the files are present, and present is not
+      # loadable. libGLESv2.dll shipped for three builds while importing a
+      # zlib1.dll that was not there: every file check passed, the installer was
+      # clean, and the app died inside its first EGL call with no exception and
+      # nothing in any log — because libEGL is a forwarding shim that does not
+      # import libGLESv2 and only reaches for it at that first call.
+      #
+      # So each library is actually loaded here, in dependency order. LoadLibrary
+      # resolves the whole import table, which is exactly the step that was
+      # failing, and it needs no GPU — so a CI runner can answer the question
+      # that previously took an install on someone else's machine to ask.
+      - name: Load the native runtime
+        shell: pwsh
+        run: |
+          $dest = Resolve-Path "artifacts/publish/${{ matrix.platform }}"
+          $order = @(
+            'libgcc_s_seh-1.dll', 'libwinpthread-1.dll', 'libstdc++-6.dll',
+            'zlib1.dll', 'libGLESv2.dll', 'libEGL.dll', 'libmpv-2.dll')
+
+          $failed = @()
+          foreach ($name in $order) {
+            $path = Join-Path $dest $name
+            try {
+              $handle = [System.Runtime.InteropServices.NativeLibrary]::Load($path)
+              Write-Host "loaded  $name  ->  0x$($handle.ToString('X'))"
+            } catch {
+              Write-Host "FAILED  $name  ->  $($_.Exception.Message)"
+              $failed += $name
+            }
+          }
+
+          if ($failed.Count -gt 0) {
+            throw "These shipped libraries cannot be loaded: $($failed -join ', ')"
+          }
 
       - name: Build installer
         shell: pwsh
