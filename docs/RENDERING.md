@@ -130,6 +130,21 @@ embed via `--wid`, compose the two visuals with DirectComposition, and give up
 translucent XAML over the video. That is an architectural retreat and belongs in
 a superseding ADR, not a quiet patch.
 
+### Sources of ANGLE that do not work (checked, 2026-08-29)
+
+Recorded so nobody spends the download again.
+
+| Source | Verdict |
+| --- | --- |
+| Chromium snapshot `chrome-win.zip` (rev 1688160) | **Stubs.** `libEGL.dll` and `libGLESv2.dll` are both exactly 470016 bytes, export *nothing*, and import only `KERNEL32.dll`. ANGLE is linked statically into `chrome.dll`. |
+| Electron (v44) | Same. No usable `libEGL.dll`. |
+| Microsoft Edge / WebView2 runtime | Chromium-derived, so the same stubs. |
+| Qt 5.15 | Ships a real ANGLE, but far too old for `EGL_ANGLE_d3d_texture_client_buffer` as this code uses it. |
+| MSYS2 `mingw-w64-x86_64-angleproject` | Real ANGLE with the D3D11 backend, and the source currently used — but see the crash note below. |
+
+The whole Chromium family is out permanently: static linking is the direction that
+ecosystem has moved in, and it is not going to reverse.
+
 ### Risk 2 — orientation
 
 GL's framebuffer origin is bottom-left; Direct3D's is top-left. `RenderFrame`
