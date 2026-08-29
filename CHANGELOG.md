@@ -92,6 +92,32 @@ this file is where that distinction is kept honest.
 
 ### Fixed
 
+- **A file opened by double-clicking it played with no picture.** This is the
+  white rectangle, and it was never about colour or about HDR — two rounds were
+  spent there.
+
+  A file association opens the file the moment the window is created, while the
+  render pipeline is still waiting for the swap chain panel's first layout pass
+  to learn its size. libmpv reaches video-output initialisation seventy-one
+  milliseconds too early, finds no render context, and neither waits nor retries:
+
+  ```
+  vo/libmpv: No render context set.
+  cplayer:   Error opening/initializing the selected video_out (--vo) device.
+  lavf:      deselect track 0
+  cplayer:   Video: no video
+  ```
+
+  It then plays the file as audio, and the panel shows a swap chain nothing has
+  ever drawn into — undefined contents, in practice white. The same file opened
+  from inside the running app was fine, which is what made this look like a
+  property of the file.
+
+  A launch file is now held until the render pipeline has been attempted, and
+  opened on every outcome: a pipeline that could not be built is a reason to play
+  the file without video, not a reason to sit on an empty window holding a path
+  it never opened.
+
 - **The per-file video description reported nothing.** It was hooked to
   `FileLoaded`, which is the obvious event and the wrong one: `video-params` is
   populated by the video output, and the video output is configured afterwards.

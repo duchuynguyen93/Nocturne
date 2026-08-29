@@ -35,6 +35,9 @@ public sealed partial class MainWindow : Window, IDisposable
     private OverlappedPresenterState? _stateBeforeFullScreen;
     private bool _renderPipelineFailed;
 
+    /// <summary>A launch file waiting for the render pipeline to exist.</summary>
+    private string? _deferredLaunchPath;
+
     /// <summary>Creates the window and starts the engine.</summary>
     public MainWindow()
     {
@@ -172,7 +175,52 @@ public sealed partial class MainWindow : Window, IDisposable
     public PlayerViewModel ViewModel { get; }
 
     /// <summary>Opens the file the app was launched with.</summary>
-    public void OpenOnLaunch(string path) => ViewModel.Open(path);
+    public void OpenOnLaunch(string path)
+    {
+        // Held back until the render pipeline exists, and this is the whole of a
+        // real bug rather than caution.
+        //
+        // A file association opens a file the instant the window is created,
+        // while the pipeline is still waiting for the panel's first layout pass
+        // to learn its size. libmpv reaches video-output initialisation, finds
+        // no render context, and does not wait or retry — it logs "No render
+        // context set", deselects the video track outright and plays the file as
+        // audio. The window then shows a swap chain nothing has ever drawn into,
+        // which is undefined and comes out white.
+        //
+        // That is why the same file played correctly when opened from inside the
+        // app and blank when double-clicked in Explorer: it was never about the
+        // file.
+        if (_renderer is null && !_renderPipelineFailed)
+        {
+            DiagnosticLog.Current.Write(
+                "nocturne", $"deferring until the pipeline is ready: {path}");
+            _deferredLaunchPath = path;
+            return;
+        }
+
+        ViewModel.Open(path);
+    }
+
+    /// <summary>
+    /// Opens the file the app was launched with, once video can accept it.
+    /// </summary>
+    /// <remarks>
+    /// Runs whether the pipeline was built or failed. A pipeline that could not
+    /// be built is a reason to play the file without video, not a reason to
+    /// leave the app sitting on an empty window holding a path it never opened.
+    /// </remarks>
+    private void OpenDeferredLaunchFile()
+    {
+        if (_deferredLaunchPath is not { } path)
+        {
+            return;
+        }
+
+        _deferredLaunchPath = null;
+        DiagnosticLog.Current.Write("nocturne", $"opening deferred file: {path}");
+        ViewModel.Open(path);
+    }
 
     /// <summary>
     /// Gives the window a real starting size.
@@ -275,6 +323,20 @@ public sealed partial class MainWindow : Window, IDisposable
     }
 
     private void TryCreateRenderer(int width, int height)
+    {
+        try
+        {
+            TryCreateRendererCore(width, height);
+        }
+        finally
+        {
+            // Every exit, including the early one and the failure one: the file
+            // this app was launched with has been waiting on this decision.
+            OpenDeferredLaunchFile();
+        }
+    }
+
+    private void TryCreateRendererCore(int width, int height)
     {
         // A previous run went into the native pipeline and never came out. Going
         // back in would repeat it, and an app that force-closes on launch cannot

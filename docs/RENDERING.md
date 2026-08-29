@@ -182,47 +182,84 @@ The general shape is worth keeping in mind for the rest of this file: a
 correction that is obviously necessary in the abstract may already have been
 applied by a layer in between.
 
-### Risk 3 — HDR is not wired up, and the last explanation of it was wrong
+### The white rectangle, explained (2026-08-30)
+
+It was not colour, not HDR, and not the file. It was a startup race, and the
+evidence is four consecutive lines of a real run:
+
+```
+02:29:11.471  mpv/fatal  vo/libmpv: No render context set.
+02:29:11.472  mpv/fatal  cplayer: Error opening/initializing the selected video_out
+02:29:11.472  mpv/v      lavf: deselect track 0
+02:29:11.472  mpv/info   cplayer: Video: no video
+...
+02:29:11.542  render     mpv render context created
+```
+
+A file association opens the file the moment the window is created. The render
+pipeline is built on the swap chain panel's **first layout pass**, which happens
+later — seventy-one milliseconds later here. libmpv reaches video-output
+initialisation, finds no render context, and neither waits nor retries: it
+deselects the video track and plays the file as audio. The panel then displays a
+swap chain nothing has ever drawn into, whose contents are undefined and which
+in practice comes out white.
+
+That is why the same file played when opened from inside the app and came out
+blank when double-clicked in Explorer. The variable was never the file; it was
+how it was opened.
+
+**The rule this establishes: no file may be loaded before the render context
+exists.** `MainWindow.OpenOnLaunch` now holds the path until the pipeline has
+been attempted, and opens it on every outcome — a pipeline that could not be
+built is a reason to play the file without video, not a reason to sit on an empty
+window holding a path.
+
+Two rounds were spent blaming colour management for this, which is worth
+recording: the app was reporting `vo=libmpv` and a healthy six-stage pipeline
+build, and every one of those lines was true. The failure was in the *interval*
+between two things that both succeeded.
+
+### Risk 3 — HDR is not wired up
 
 The swap chain is `B8G8R8A8_UNorm` in the default sRGB colour space, the EGL
 config is 8-bit, and nothing calls `SetColorSpace1`. There is no HDR output path.
 
-**What this render path actually does with an HDR source.** `vo_gpu` refuses to
-emit HDR when the target does not declare it: with no `target-trc` set and no
-colour space on the framebuffer, it picks gamma 2.2 with a 203-nit peak and
-tone-maps down to it. The curve is `bt.2390`. So an HDR file is tone-mapped to
-SDR whatever this app does, and always was.
+**What this render path does with an HDR source.** `vo_gpu` refuses to emit HDR
+when the target does not declare it: with no `target-trc` set and no colour space
+on the framebuffer, it picks gamma 2.2 with a 203-nit peak and tone-maps down to
+it, using `bt.2390`. So an HDR file is tone-mapped to SDR whatever this app does,
+and always was.
 
-**The correction.** An earlier version of this section blamed a white rectangle
-on `target-colorspace-hint=yes` — the reasoning being that the option promises
-the presenting layer will honour the signalled colour space, so libmpv stops
-tone-mapping and hands over raw PQ. That mechanism is real, and it is not on this
-path: `target-colorspace-hint` is read only by `vo_gpu_next`, and mpv's manual
-marks it gpu-next only. Setting it here did nothing in either direction, so
-turning it off fixed nothing. **The cause of the white rectangle is unknown and
-still open.** The option has been removed rather than left at `no`, because a
-setting that does nothing is worse than absent: it invites the same explanation
-to be written again.
+**A correction that still stands.** An earlier version of this section blamed the
+white rectangle on `target-colorspace-hint=yes`, reasoning that the option makes
+libmpv stop tone-mapping and hand over raw PQ. That mechanism is real and is not
+on this path — the option is read only by `vo_gpu_next`, and mpv's manual marks
+it gpu-next only. It was removed rather than set to `no`, because a setting that
+does nothing invites the same explanation to be written again. The actual cause
+of the white rectangle is above.
 
-The line to read next is the per-file `video` entry in the diagnostic log, which
-records primaries, transfer function and signal peak for whatever was decoded.
-
-**What an HDR target would actually take.** Not this option — the render API has
-no colour-space parameter at all. It is `target-trc=pq`, `target-prim=bt.2020`
-and `target-peak=<display peak>`, together with:
+**What an HDR target would take.** Not that option — the render API has no
+colour-space parameter. It is `target-trc=pq`, `target-prim=bt.2020` and
+`target-peak=<display peak>`, together with:
 
 1. the swap chain format changed to `R10G10B10A2`,
 2. `IDXGISwapChain3::SetColorSpace1` with the PQ colour space,
 3. the EGL config and the FBO's `InternalFormat` moved to `GL_RGB10_A2`,
 4. a fallback for displays that report no HDR support.
 
-**A smaller improvement available first.** `hdr-compute-peak` needs compute
-shaders and SSBOs, which is OpenGL ES 3.1. `AngleContext` asks for
-`EGL_CONTEXT_CLIENT_VERSION 3` with no minor version, so ANGLE returns ES 3.0
-and peak detection silently disables itself — tone mapping then works from static
-metadata, and a PQ file without metadata is treated as a 10,000-nit source and
-comes out much darker than it should. Requesting ES 3.1 with a fallback to 3.0
-would fix that without touching the swap chain.
+**A smaller improvement available first**, and now confirmed by a real run:
+
+```
+libmpv_render: Disabling HDR peak computation
+               (compute shaders=0, SSBO=0).
+```
+
+`hdr-compute-peak` needs OpenGL ES 3.1. `AngleContext` asks for
+`EGL_CONTEXT_CLIENT_VERSION 3` with no minor version, so ANGLE returns ES 3.0 —
+the log confirms `GL_VERSION='OpenGL ES 3.0.0'`. Tone mapping therefore works
+from static metadata, and a PQ file without metadata is treated as a 10,000-nit
+source and comes out much darker than it should. Requesting ES 3.1 with a
+fallback to 3.0 would fix that without touching the swap chain.
 
 ### Risk 4 — no independent flip
 
