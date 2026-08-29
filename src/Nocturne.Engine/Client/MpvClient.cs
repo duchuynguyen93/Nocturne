@@ -30,6 +30,9 @@ public sealed unsafe class MpvClient : IDisposable
     private nint _handle;
     private bool _disposed;
 
+    /// <summary>Set once, before anything in <see cref="Dispose"/> runs.</summary>
+    private int _disposeStarted;
+
     /// <summary>
     /// Creates and initializes a libmpv handle.
     /// </summary>
@@ -276,6 +279,19 @@ public sealed unsafe class MpvClient : IDisposable
             MpvNative.Wakeup(handleForWakeup);
         }
 
+        // Checked before the lock is touched at all, because the lock itself is
+        // disposed at the end of this method: a second Dispose that went
+        // straight to EnterWriteLock would throw ObjectDisposedException from
+        // the lock and never reach the _disposed guard inside it. That is not
+        // hypothetical — an event handler disposing the client on Shutdown is
+        // called out below as a natural thing to write, and the window's own
+        // teardown then disposes it again.
+        if (Volatile.Read(ref _disposeStarted) != 0
+            || Interlocked.Exchange(ref _disposeStarted, 1) != 0)
+        {
+            return;
+        }
+
         // Take the writer lock so any in-flight command finishes against a live
         // handle. Everything after this point sees _disposed and returns.
         _lifetimeLock.EnterWriteLock();
@@ -316,8 +332,7 @@ public sealed unsafe class MpvClient : IDisposable
             // cannot keep the process alive either way.
             if (!_eventThread.Join(TimeSpan.FromSeconds(2)))
             {
-                LogMessage?.Invoke(this, new MpvLogEventArgs(
-                    "nocturne", "warn", "mpv event pump did not stop within two seconds."));
+                RaiseLogSafely("warn", "mpv event pump did not stop within two seconds.");
             }
         }
 
@@ -386,8 +401,7 @@ public sealed unsafe class MpvClient : IDisposable
             catch (Exception ex)
 #pragma warning restore CA1031
             {
-                LogMessage?.Invoke(this, new MpvLogEventArgs(
-                    "nocturne", "error", $"Event handler threw: {ex}"));
+                RaiseLogSafely("error", $"Event handler threw: {ex}");
             }
 
             if (nativeEvent.EventId == MpvEventId.Shutdown)
@@ -493,6 +507,32 @@ public sealed unsafe class MpvClient : IDisposable
             Utf8.Read(message.Prefix) ?? string.Empty,
             Utf8.Read(message.Level) ?? string.Empty,
             (Utf8.Read(message.Text) ?? string.Empty).TrimEnd('\n')));
+    }
+
+    /// <summary>
+    /// Reports an internal condition through <see cref="LogMessage"/>, tolerating
+    /// a subscriber that throws.
+    /// </summary>
+    /// <remarks>
+    /// Both callers are already handling a failure — one from inside the pump's
+    /// own catch block, one during disposal. An exception from the log
+    /// subscriber there is a second fault on top of the first, and the pump runs
+    /// on a background thread, so letting it escape ends the process. Writing to
+    /// a log file is exactly the kind of subscriber that fails when the disk is
+    /// full or the file is locked, which is to say precisely when something else
+    /// has already gone wrong.
+    /// </remarks>
+    private void RaiseLogSafely(string level, string text)
+    {
+        try
+        {
+            LogMessage?.Invoke(this, new MpvLogEventArgs("nocturne", level, text));
+        }
+#pragma warning disable CA1031 // There is no third place to report this.
+        catch (Exception)
+#pragma warning restore CA1031
+        {
+        }
     }
 
     private void WithHandle(Action<nint> action)

@@ -82,4 +82,56 @@ public sealed class TimecodeTests
     {
         Assert.Equal("-00:05", Timecode.Format(TimeSpan.FromSeconds(-5)));
     }
+
+    // ── The pair keeps one shape ──
+    //
+    // FormatPair exists for exactly one reason: both halves must have the same
+    // number of fields, so the transport bar does not change width as a film
+    // crosses the one-hour mark. A case where one half grows an hours field and
+    // the other does not is the failure this type was written to prevent.
+
+    private static int FieldCount(string formatted) => formatted.Split(':').Length;
+
+    [Theory]
+    [InlineData(-7200, 0)]      // negative position, unknown duration
+    [InlineData(-30, 0)]        // negative position, unknown duration, no hours
+    [InlineData(7200, 0)]       // live stream, an hour in
+    [InlineData(30, 0)]         // live stream, just started
+    [InlineData(90, 5400)]      // ordinary film
+    [InlineData(7200, 30)]      // position past a short duration
+    public void Both_halves_of_a_pair_have_the_same_shape(double positionSeconds, double durationSeconds)
+    {
+        (string position, string duration) = Timecode.FormatPair(
+            TimeSpan.FromSeconds(positionSeconds),
+            TimeSpan.FromSeconds(durationSeconds));
+
+        Assert.Equal(FieldCount(duration), FieldCount(position));
+    }
+
+    [Fact]
+    public void An_unknown_duration_reads_as_a_placeholder_not_as_zero()
+    {
+        (string position, string duration) = Timecode.FormatPair(
+            TimeSpan.FromSeconds(42), TimeSpan.Zero);
+
+        // "00:00" would be a claim about the file. The dashes say the length is
+        // not known, which for a live stream is the truth.
+        Assert.Equal("00:42", position);
+        Assert.Equal("--:--", duration);
+    }
+
+    [Fact]
+    public void A_position_beyond_ninety_nine_hours_is_clamped_rather_than_wrapped()
+    {
+        Assert.Equal("99:00:00", Timecode.Format(TimeSpan.FromHours(500)));
+        Assert.Equal(TimeSpan.FromHours(99).Negate(), Timecode.FromSeconds(-1e12));
+    }
+
+    [Fact]
+    public void A_second_is_truncated_not_rounded()
+    {
+        // Rounding would show 01:00 for a file that is still at 59.999 seconds,
+        // and the last second of every file would read as the next minute.
+        Assert.Equal("00:59", Timecode.Format(TimeSpan.FromSeconds(59.999)));
+    }
 }

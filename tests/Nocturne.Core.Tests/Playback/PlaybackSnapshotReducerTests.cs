@@ -180,20 +180,155 @@ public sealed class PlaybackSnapshotReducerTests
     {
         PlaybackSnapshot current = Playing(TimeSpan.FromMinutes(2), TimeSpan.FromMinutes(4));
 
-        // core-idle is observed for the render layer's benefit and deliberately
-        // does not alter the snapshot, so it is the one exception.
-        string[] expectedToReduce = [.. Props.All.Where(p => p != Props.SeekingOrBuffering)];
-
-        foreach (string property in expectedToReduce)
+        // No exceptions. This test used to exclude core-idle, with a comment
+        // saying it was observed "for the render layer's benefit" and
+        // deliberately changed nothing — the render layer never read it, and
+        // every one of its changes was marshalled across the event thread and
+        // dropped. An exception list is how a coverage test comes to certify the
+        // gap it was written to find, so there is no longer a list: a property
+        // that nothing reduces does not belong in the subscription.
+        foreach (string property in Props.All)
         {
             object? probe = property switch
             {
-                Props.Paused or Props.Muted or Props.PausedForCache => true,
+                Props.Paused or Props.Muted or Props.PausedForCache
+                    or Props.EofReached => true,
                 Props.Path or Props.MediaTitle => "probe",
                 _ => 2.0,
             };
 
             Assert.NotSame(current, PlaybackSnapshotReducer.Apply(current, property, probe));
         }
+    }
+
+    // ── Values libmpv is allowed to publish and the app is not allowed to hold ──
+    //
+    // Every one of these arrives as a plain double from a real property, so the
+    // type test in the reducer lets it through. What is being checked is that a
+    // value which is a valid double but not a valid *volume* or *speed* leaves
+    // the snapshot alone, rather than being stored and bound to a control.
+
+    [Theory]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    [InlineData(double.NegativeInfinity)]
+    public void A_non_finite_volume_leaves_the_previous_volume_alone(double reported)
+    {
+        PlaybackSnapshot current = Playing(TimeSpan.Zero, TimeSpan.FromMinutes(1)) with { Volume = 70 };
+
+        PlaybackSnapshot next = PlaybackSnapshotReducer.Apply(current, Props.Volume, reported);
+
+        // Math.Clamp(NaN, 0, 100) is NaN, not 0 and not 100. Stored, it reaches
+        // the volume slider, whose Value cannot represent it — the control goes
+        // blank and every later drag reads back NaN.
+        Assert.Equal(70, next.Volume);
+    }
+
+    [Theory]
+    [InlineData(double.PositiveInfinity)]
+    [InlineData(double.NaN)]
+    public void A_non_finite_speed_leaves_the_previous_speed_alone(double reported)
+    {
+        PlaybackSnapshot current = Playing(TimeSpan.Zero, TimeSpan.FromMinutes(1)) with { Speed = 1.5 };
+
+        PlaybackSnapshot next = PlaybackSnapshotReducer.Apply(current, Props.Speed, reported);
+
+        Assert.Equal(1.5, next.Speed);
+    }
+
+    [Fact]
+    public void Reaching_the_end_survives_the_pause_that_follows_it()
+    {
+        PlaybackSnapshot ended = PlaybackSnapshotReducer.MarkEnded(
+            Playing(TimeSpan.FromMinutes(3), TimeSpan.FromMinutes(3)));
+
+        Assert.Equal(PlaybackStatus.Ended, ended.Status);
+
+        // keep-open-pause=yes means libmpv pauses when it reaches the end, so
+        // this property change always arrives just after. Letting it decide the
+        // status turns "finished, press play to watch again" into an ordinary
+        // pause in the middle of a file, and the transport bar stops offering
+        // to replay.
+        PlaybackSnapshot afterPause = PlaybackSnapshotReducer.Apply(ended, Props.Paused, true);
+
+        Assert.Equal(PlaybackStatus.Ended, afterPause.Status);
+    }
+
+    [Fact]
+    public void Starting_playback_again_after_the_end_leaves_the_ended_state()
+    {
+        PlaybackSnapshot ended = PlaybackSnapshotReducer.MarkEnded(
+            Playing(TimeSpan.FromMinutes(3), TimeSpan.FromMinutes(3)));
+
+        // The other half of the rule above: unpausing is a real decision by the
+        // user, and it must not be ignored just because the file had finished.
+        PlaybackSnapshot resumed = PlaybackSnapshotReducer.Apply(ended, Props.Paused, false);
+
+        Assert.Equal(PlaybackStatus.Playing, resumed.Status);
+    }
+
+    // ── Reaching the end of a file ──
+
+    [Fact]
+    public void The_eof_property_is_observed_because_end_of_file_events_never_arrive()
+    {
+        // keep-open=yes stops libmpv unloading the file at the end — that is
+        // what holds the last frame on screen — and MPV_EVENT_END_FILE only
+        // arrives after a file is unloaded. So this property is the only signal
+        // that playback finished. Dropping it from the observed list makes the
+        // playlist stop advancing, silently.
+        Assert.Contains(Props.EofReached, PlaybackSnapshotReducer.Properties.All);
+    }
+
+    [Fact]
+    public void Running_past_the_end_ends_playback()
+    {
+        PlaybackSnapshot playing = Playing(TimeSpan.FromMinutes(3), TimeSpan.FromMinutes(3));
+
+        PlaybackSnapshot ended = PlaybackSnapshotReducer.Apply(playing, Props.EofReached, true);
+
+        Assert.Equal(PlaybackStatus.Ended, ended.Status);
+        Assert.Equal(TimeSpan.FromMinutes(3), ended.Position);
+    }
+
+    [Fact]
+    public void The_eof_flag_clearing_does_not_undo_the_ended_state()
+    {
+        PlaybackSnapshot ended = PlaybackSnapshotReducer.Apply(
+            Playing(TimeSpan.FromMinutes(3), TimeSpan.FromMinutes(3)), Props.EofReached, true);
+
+        // libmpv clears the flag as part of loading whatever comes next. Acting
+        // on that edge would cancel the very state the app is about to react to.
+        PlaybackSnapshot after = PlaybackSnapshotReducer.Apply(ended, Props.EofReached, false);
+
+        Assert.Equal(PlaybackStatus.Ended, after.Status);
+    }
+
+    [Fact]
+    public void Running_past_the_end_with_nothing_loaded_changes_nothing()
+    {
+        PlaybackSnapshot after = PlaybackSnapshotReducer.Apply(
+            PlaybackSnapshot.Idle, Props.EofReached, true);
+
+        Assert.Equal(PlaybackStatus.Idle, after.Status);
+    }
+
+    [Fact]
+    public void A_negative_position_reads_as_the_start_not_as_a_negative_timecode()
+    {
+        PlaybackSnapshot playing = Playing(TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(5));
+
+        // libmpv echoes the pre-clamp target while a seek is in flight.
+        PlaybackSnapshot after = PlaybackSnapshotReducer.Apply(playing, Props.TimePosition, -1.5);
+
+        Assert.Equal(TimeSpan.Zero, after.Position);
+    }
+
+    [Fact]
+    public void An_unobserved_property_is_not_left_in_the_subscription_list()
+    {
+        // Subscribing to a property with no case in Apply marshals a value
+        // across the event thread on every change and throws it away.
+        Assert.DoesNotContain(Props.SeekingOrBuffering, PlaybackSnapshotReducer.Properties.All);
     }
 }

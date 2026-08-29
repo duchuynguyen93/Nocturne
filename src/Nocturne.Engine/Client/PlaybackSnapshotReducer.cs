@@ -55,17 +55,45 @@ public static class PlaybackSnapshotReducer
         /// <summary>Display title, from container metadata when present.</summary>
         public const string MediaTitle = "media-title";
 
-        /// <summary>Whether the core is seeking or filling its buffer.</summary>
+        /// <summary>
+        /// Whether the core is seeking or filling its buffer. Not observed.
+        /// </summary>
+        /// <remarks>
+        /// Deliberately absent from <see cref="All"/>. It was subscribed for a
+        /// while with no case in <see cref="Apply"/> to receive it, so every
+        /// change was marshalled across the event thread and thrown away.
+        /// <para>
+        /// Adding it back needs a decision first, not just a case: it is true
+        /// while paused as well as while seeking, and
+        /// <see cref="PlaybackSnapshot.IsBuffering"/> — which nothing in the app
+        /// currently reads — cannot hold both that and
+        /// <c>paused-for-cache</c> without becoming two fields.
+        /// </para>
+        /// </remarks>
         public const string SeekingOrBuffering = "core-idle";
 
         /// <summary>Whether the demuxer is still filling its cache.</summary>
         public const string PausedForCache = "paused-for-cache";
 
+        /// <summary>
+        /// Whether playback has run past the end of the file.
+        /// </summary>
+        /// <remarks>
+        /// The only signal that the end was reached, given how this app is
+        /// configured. <c>keep-open=yes</c> stops libmpv unloading the file at
+        /// the end — that is what holds the last frame on screen instead of
+        /// blanking it — and <c>MPV_EVENT_END_FILE</c> is documented to arrive
+        /// only *after* a file is unloaded. So with keep-open on, that event
+        /// never comes for an ordinary end of playback, and anything waiting for
+        /// it waits forever. This property is what libmpv sets instead.
+        /// </remarks>
+        public const string EofReached = "eof-reached";
+
         /// <summary>Every observed name, in subscription order.</summary>
         public static readonly IReadOnlyList<string> All =
         [
             TimePosition, Duration, Paused, Speed, Volume, Muted,
-            Path, MediaTitle, SeekingOrBuffering, PausedForCache,
+            Path, MediaTitle, PausedForCache, EofReached,
         ];
     }
 
@@ -87,8 +115,15 @@ public static class PlaybackSnapshotReducer
 
         return name switch
         {
+            // Negative positions are clamped, not stored. libmpv echoes a
+            // pre-clamp time-pos while a seek is in flight, and SeekMath's own
+            // notes say so — but nothing was clamping it on the way back in, so
+            // the transport bar could flash "-00:01" mid-seek.
             Properties.TimePosition => value is double position
-                ? current with { Position = Timecode.FromSeconds(position) }
+                ? current with
+                {
+                    Position = position > 0 ? Timecode.FromSeconds(position) : TimeSpan.Zero,
+                }
 
                 // A null time-pos means "between files". Holding the previous
                 // position would leave the seek bar parked mid-track while the
@@ -111,16 +146,32 @@ public static class PlaybackSnapshotReducer
                 ? current with { Status = ResolveStatus(current.Status, paused) }
                 : current,
 
-            Properties.Speed => value is double speed && speed > 0
+            // double.IsFinite, not just a range test. Every one of these arrives
+            // as a valid double from a real property, so the type check lets it
+            // through, and Math.Clamp does not rescue it: Clamp(NaN, 0, 100) is
+            // NaN, Clamp(-inf, 0, 100) is 0, and Clamp(+inf, 0, 100) is 100. The
+            // first blanks the volume slider and makes every later drag read
+            // back NaN; the other two silently move the volume to an end of its
+            // range. Keeping the previous value is the only honest answer to a
+            // number that is not a volume.
+            Properties.Speed => value is double speed && double.IsFinite(speed) && speed > 0
                 ? current with { Speed = speed }
                 : current,
 
-            Properties.Volume => value is double volume
+            Properties.Volume => value is double volume && double.IsFinite(volume)
                 ? current with { Volume = Math.Clamp(volume, 0.0, 100.0) }
                 : current,
 
             Properties.Muted => value is bool muted
                 ? current with { IsMuted = muted }
+                : current,
+
+            // Reaching the end is a status change, and leaving it is not: the
+            // way out of Ended is opening a file or seeking, both of which say
+            // so themselves. Acting on the false edge here would undo Ended the
+            // moment libmpv cleared the flag for the next file.
+            Properties.EofReached => value is bool eof && eof && current.HasMedia
+                ? MarkEnded(current)
                 : current,
 
             Properties.Path => current with { Source = value as string },
@@ -226,6 +277,18 @@ public static class PlaybackSnapshotReducer
         // A pause change while opening or after a failure says nothing about
         // whether a file is playable, so it must not promote the status.
         if (current is PlaybackStatus.Idle or PlaybackStatus.Opening or PlaybackStatus.Failed)
+        {
+            return current;
+        }
+
+        // Ended is the same kind of case, but only in one direction, which is
+        // why it is not in the list above. The app runs with keep-open-pause,
+        // so libmpv pauses the moment it reaches the end and this property
+        // change always arrives just afterwards — treating it as an ordinary
+        // pause turns "finished, press play to watch it again" into a pause in
+        // the middle of a file. Unpausing, on the other hand, is a real decision
+        // by someone who wants to watch it again, and must be honoured.
+        if (current is PlaybackStatus.Ended && paused)
         {
             return current;
         }

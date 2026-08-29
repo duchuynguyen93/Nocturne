@@ -67,6 +67,108 @@ this file is where that distinction is kept honest.
 
 ### Fixed
 
+Findings from four independent reviews of the render, engine, and app layers,
+plus a review that designed the test suite rather than looking for defects.
+Everything below was verified by reading the code; where a test could express it,
+the test was written first and failed first.
+
+- **Playback never advanced to the next file.** `keep-open=yes` stops libmpv
+  unloading a file at the end — which is what holds the last frame on screen —
+  and `MPV_EVENT_END_FILE` is documented to arrive only *after* an unload. So the
+  event never came, `ReachedEnd` never fired, and the whole end-of-file path was
+  unreachable code. The `eof-reached` property is now observed, and every route
+  into `Ended` reports through one place so the event fires exactly once however
+  it was reached.
+
+- **A latent crash in the import resolver.** `RegisterCallingAssembly` added an
+  assembly to a list, registered a resolver for it, and only then materialised
+  the `Lazy` that walks that same list — registering it a second time.
+  `SetDllImportResolver` throws on a second registration and `Lazy` caches the
+  exception forever, so every later libmpv call would have failed rather than the
+  one that tripped it. It never fired only because the window happens to build
+  the engine before the renderer. Two independent reviews found this.
+
+- **Disposing the client twice threw.** The second call reached
+  `EnterWriteLock` on a lock the first call had disposed, before the `_disposed`
+  guard inside it. Reaching that guard requires the lock to still exist.
+
+- Non-finite volumes and speeds are refused instead of stored.
+  `Math.Clamp(NaN, 0, 100)` is `NaN`, which blanks the volume slider; `±∞` clamp
+  to the ends of the range and move the volume silently.
+
+- Reaching the end of a file survives the pause that immediately follows it.
+  With `keep-open-pause=yes` that pause always arrives, and treating it as an
+  ordinary pause turned "finished" into "paused in the middle".
+
+- Negative positions are clamped on the way in. libmpv echoes a pre-clamp
+  `time-pos` during a seek, and the transport bar could flash `-00:01`.
+
+- **Dragging the seek bar put the position back.** A `Slider` releases pointer
+  capture as part of an ordinary click, so `PointerCaptureLost` fired on every
+  seek and was being treated as an abandoned gesture. Capture loss now commits;
+  only a real cancellation cancels.
+
+- **Clicking the volume track did nothing.** The Slider's class handler moves the
+  thumb and raises `ValueChanged` before the instance handler runs, so the first
+  change arrived while the gesture flag was still false and was discarded — the
+  thumb moved and sprang back. The click now commits.
+
+- Leaving full screen restores a maximized window.
+  `SetPresenter(Overlapped)` returns a default presenter, not the previous one.
+
+- The swap chain follows display-scale changes. Moving the window to a display at
+  a different scale usually leaves the panel the same size in DIPs, so
+  `SizeChanged` never fired while the pixel count behind it changed.
+
+- `ResizeBuffers` and `Present` results are checked. Vortice returns a `Result`
+  rather than throwing, so a device removed by a driver reset was ignored: the
+  loop went on reporting swaps to libmpv that never reached a screen, and the
+  picture froze with nothing logged.
+
+- Resizing builds the new surface before releasing the old one, so a failure
+  halfway through leaves a working renderer instead of one holding no surface at
+  all — which would have made disposal call `mpv_render_context_free` with no
+  current context.
+
+- The crash guard is closed by a frame reaching the screen, not by the
+  constructor returning. The heaviest native work happens on the render thread
+  after construction, so the previous timing declared success before the part
+  most likely to fault had run.
+
+- Errors raised by the window itself — an unreadable dropped item, a picker that
+  would not open — survive longer than one frame. They were being written
+  straight to the bound property and overwritten by the next snapshot, several
+  times a second.
+
+- The transport bar stays when the video pipeline fails. The message says audio
+  still works, and hiding every control underneath that sentence left the
+  keyboard as the only way to act on it.
+
+- Pruning old logs no longer disables logging. It caught only `IOException`, so a
+  read-only log file threw past it and failed the whole of `Start` — running the
+  session with no log at all, in the session most likely to need one.
+
+- A log subscriber that throws no longer kills the process. Both places that
+  report through `LogMessage` are already handling a failure, and the event pump
+  runs on a background thread.
+
+- Seeking with nothing loaded is ignored rather than thrown. libmpv answers
+  `seek` with `MPV_ERROR_COMMAND` when idle, which reached the UI thread as an
+  exception from a keypress.
+
+- The end-of-file handler checks for disposal before opening the next file. A
+  file ending as the window closes is not a rare coincidence; it is when files
+  end.
+
+- Log file names carry the process id. A file association starts a process per
+  double-click, and two starting in the same second shared one file with two
+  writers.
+
+- `core-idle` is no longer observed. It was subscribed with no case to receive
+  it, so every change was marshalled across the event thread and dropped — and
+  the coverage test that should have caught it had been given an exception list
+  containing exactly that property. The exception list is gone.
+
 - **HDR files rendered as a white rectangle.** Two files in the same container
   behaved differently, which looked like a decoder problem and was a colour one.
 

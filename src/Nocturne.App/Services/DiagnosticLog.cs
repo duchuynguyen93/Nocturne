@@ -55,9 +55,15 @@ public sealed class DiagnosticLog
         try
         {
             Directory.CreateDirectory(directory);
+            // The process id is in the name because a file association starts a
+            // new process per double-click. Two of them launched within the same
+            // second would otherwise open the same file with two independent
+            // writers, and appending from two processes is not atomic — the
+            // lines interleave mid-sentence, in the one file whose whole purpose
+            // is to be read after something went wrong.
             path = System.IO.Path.Combine(
                 directory,
-                $"nocturne-{DateTime.Now:yyyyMMdd-HHmmss}.log");
+                $"nocturne-{DateTime.Now:yyyyMMdd-HHmmss}-{Environment.ProcessId}.log");
 
             // Keep the last few runs and no more. Nobody reads the tenth-oldest
             // log, and an unbounded folder in AppData is a slow leak.
@@ -149,9 +155,16 @@ public sealed class DiagnosticLog
             {
                 file.Delete();
             }
-            catch (IOException)
+#pragma warning disable CA1031 // Pruning must never be the reason logging stops.
+            catch (Exception)
+#pragma warning restore CA1031
             {
-                // Held open by something else. It will be pruned next run.
+                // Held open by something else, or marked read-only, or sitting
+                // in a synced folder that objects. Catching only IOException let
+                // an UnauthorizedAccessException escape the loop and fail the
+                // whole of Start — which set the writer to null and ran the
+                // entire session with no log at all, in the session that most
+                // needed one.
             }
         }
     }

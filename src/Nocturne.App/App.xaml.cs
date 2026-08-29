@@ -52,6 +52,7 @@ public partial class App : Application
 
         // Read before the window exists, because the window is what starts the
         // attempt this is guarding.
+        RenderGuard.Failed += reason => DiagnosticLog.Current.Write("render-guard", reason);
         RenderGuard.Initialize(DataDirectory);
         if (RenderGuard.PreviousAttemptFailed)
         {

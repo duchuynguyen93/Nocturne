@@ -121,7 +121,19 @@ public sealed class PlayerEngine : IDisposable
     /// </remarks>
     public void SeekTo(TimeSpan position)
     {
-        TimeSpan target = SeekMath.ClampToRange(position, Snapshot.Duration);
+        PlaybackSnapshot current = Snapshot;
+
+        // libmpv answers `seek` with MPV_ERROR_COMMAND when nothing is loaded,
+        // which MpvClient turns into a thrown MpvException on the caller's
+        // thread — the UI thread, for a keyboard shortcut or a slider drag.
+        // Pressing the right arrow before opening a file is not an error worth
+        // a stack trace; it is a request with nothing to act on.
+        if (!current.HasMedia)
+        {
+            return;
+        }
+
+        TimeSpan target = SeekMath.ClampToRange(position, current.Duration);
         _client.Command(
             "seek",
             target.TotalSeconds.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
@@ -197,8 +209,8 @@ public sealed class PlayerEngine : IDisposable
     {
         PlaybackSnapshotReducer.Properties.Paused
             or PlaybackSnapshotReducer.Properties.Muted
-            or PlaybackSnapshotReducer.Properties.SeekingOrBuffering
-            or PlaybackSnapshotReducer.Properties.PausedForCache => MpvFormat.Flag,
+            or PlaybackSnapshotReducer.Properties.PausedForCache
+            or PlaybackSnapshotReducer.Properties.EofReached => MpvFormat.Flag,
 
         PlaybackSnapshotReducer.Properties.Path
             or PlaybackSnapshotReducer.Properties.MediaTitle => MpvFormat.String,
@@ -234,7 +246,34 @@ public sealed class PlayerEngine : IDisposable
     }
 
     private void OnPropertyChanged(object? sender, MpvPropertyChangedEventArgs e) =>
-        Mutate(current => PlaybackSnapshotReducer.Apply(current, e.Name, e.Value));
+        MutateAndReportEnd(current => PlaybackSnapshotReducer.Apply(current, e.Name, e.Value));
+
+    /// <summary>
+    /// Applies a transform and raises <see cref="ReachedEnd"/> on the edge into
+    /// <see cref="PlaybackStatus.Ended"/>.
+    /// </summary>
+    /// <remarks>
+    /// Every route into Ended reports through here, so the event fires once per
+    /// arrival however it was reached — the <c>eof-reached</c> property with
+    /// <c>keep-open</c> on, or <c>MPV_EVENT_END_FILE</c> without it. Reporting
+    /// at each call site instead is what let one route fire twice and the other
+    /// not at all.
+    /// <para>
+    /// Only the event thread calls this, so reading the status either side of
+    /// the mutation cannot interleave with another arrival.
+    /// </para>
+    /// </remarks>
+    private void MutateAndReportEnd(Func<PlaybackSnapshot, PlaybackSnapshot> transform)
+    {
+        bool wasEnded = Snapshot.Status == PlaybackStatus.Ended;
+
+        Mutate(transform);
+
+        if (!wasEnded && Snapshot.Status == PlaybackStatus.Ended)
+        {
+            ReachedEnd?.Invoke(this, EventArgs.Empty);
+        }
+    }
 
     private void OnFileLoaded(object? sender, EventArgs e)
     {
@@ -261,8 +300,7 @@ public sealed class PlayerEngine : IDisposable
             return;
         }
 
-        Mutate(PlaybackSnapshotReducer.MarkEnded);
-        ReachedEnd?.Invoke(this, EventArgs.Empty);
+        MutateAndReportEnd(PlaybackSnapshotReducer.MarkEnded);
     }
 
     private void OnLogMessage(object? sender, MpvLogEventArgs e) => LogMessage?.Invoke(this, e);

@@ -76,11 +76,22 @@ public static class Timecode
         TimeSpan clampedDuration = Clamp(duration);
         bool durationKnown = clampedDuration > TimeSpan.Zero;
 
-        // The shape is chosen from the duration, not the position, so it stays
-        // fixed for the whole file instead of switching at the one-hour mark.
-        bool forceHours = durationKnown
-            ? clampedDuration.TotalHours >= 1
-            : Clamp(position).TotalHours >= 1;
+        // The shape is chosen from the duration so it stays fixed for the whole
+        // file instead of switching at the one-hour mark — but the position gets
+        // a say too, by magnitude, and both of those matter.
+        //
+        // The position can exceed the duration: libmpv reports a pre-clamp
+        // time-pos during a seek, and a wrong duration in a container is
+        // ordinary. Ignoring the position then gives `02:00:00` beside `00:30`.
+        // And Math.Abs, because a negative position also arrives from libmpv —
+        // `-02:00:00` is three fields whatever its sign, while a comparison that
+        // reads -2 as "less than one hour" pairs it with a two-field `--:--`.
+        //
+        // Both halves having the same number of fields is the entire reason this
+        // method exists in place of two Format calls.
+        bool forceHours =
+            (durationKnown && clampedDuration.TotalHours >= 1)
+            || Math.Abs(Clamp(position).TotalHours) >= 1;
 
         string formattedPosition = Format(position, forceHours);
         string formattedDuration = durationKnown

@@ -32,6 +32,7 @@ public sealed partial class MainWindow : Window, IDisposable
     private PlayerEngine? _engine;
     private VideoRenderer? _renderer;
     private bool _isFullScreen;
+    private OverlappedPresenterState? _stateBeforeFullScreen;
     private bool _renderPipelineFailed;
 
     /// <summary>Creates the window and starts the engine.</summary>
@@ -78,6 +79,8 @@ public sealed partial class MainWindow : Window, IDisposable
 
         ViewModel = new PlayerViewModel(_engine, DispatcherQueue);
 
+        VideoPanel.CompositionScaleChanged += OnVideoPanelScaleChanged;
+
         AttachSliderGestures();
         AttachAccelerators();
         Closed += OnClosed;
@@ -100,11 +103,16 @@ public sealed partial class MainWindow : Window, IDisposable
         SeekBar.AddHandler(UIElement.PointerReleasedEvent,
             new PointerEventHandler(OnSeekBarPointerReleased), handledEventsToo: true);
 
-        // A drag interrupted by an alt-tab or a cancelled touch never sends a
-        // release. Without these the suppression flag latches on and the seek
-        // bar stops following playback for the rest of the session.
+        // Capture loss commits, it does not cancel. A Slider gives up pointer
+        // capture as part of an ordinary click, so this fires on every seek —
+        // treating it as an abandoned gesture put the pre-seek position back and
+        // the thumb sprang backwards under the pointer each time. The view model
+        // ignores whichever of the two arrives second.
         SeekBar.AddHandler(UIElement.PointerCaptureLostEvent,
-            new PointerEventHandler(OnSeekBarPointerCancelled), handledEventsToo: true);
+            new PointerEventHandler(OnSeekBarPointerReleased), handledEventsToo: true);
+
+        // A genuine cancellation — a touch the system took away — is the one
+        // case where the gesture really should be abandoned without seeking.
         SeekBar.AddHandler(UIElement.PointerCanceledEvent,
             new PointerEventHandler(OnSeekBarPointerCancelled), handledEventsToo: true);
 
@@ -219,7 +227,24 @@ public sealed partial class MainWindow : Window, IDisposable
     /// a <c>SwapChainPanel</c> reports zero dimensions until it has been laid
     /// out, and a swap chain cannot be created at zero by zero.
     /// </remarks>
-    private void OnVideoPanelSizeChanged(object sender, SizeChangedEventArgs e)
+    /// <summary>
+    /// Rebuilds the surface when the display scale changes without the layout.
+    /// </summary>
+    /// <remarks>
+    /// Dragging the window from a 100% display to a 150% one usually leaves the
+    /// panel the same size in DIPs, so <c>SizeChanged</c> never fires — while
+    /// the number of physical pixels behind it has grown by half. Without this
+    /// the swap chain keeps the old pixel size and the video is upscaled by the
+    /// compositor: exactly the softness the CompositionScale factor below exists
+    /// to avoid, arrived at by a different route.
+    /// </remarks>
+    private void OnVideoPanelScaleChanged(SwapChainPanel sender, object args) =>
+        ResizeSurfaceToPanel(VideoPanel.ActualWidth, VideoPanel.ActualHeight);
+
+    private void OnVideoPanelSizeChanged(object sender, SizeChangedEventArgs e) =>
+        ResizeSurfaceToPanel(e.NewSize.Width, e.NewSize.Height);
+
+    private void ResizeSurfaceToPanel(double widthInDips, double heightInDips)
     {
         if (_engine is null || _renderPipelineFailed)
         {
@@ -229,8 +254,8 @@ public sealed partial class MainWindow : Window, IDisposable
         // Physical pixels, not DIPs. CompositionScale carries the display scale
         // and any transform on the panel; using DIPs renders the video at 67% of
         // the surface on a 150% display and then upscales it back.
-        int width = (int)Math.Round(e.NewSize.Width * VideoPanel.CompositionScaleX);
-        int height = (int)Math.Round(e.NewSize.Height * VideoPanel.CompositionScaleY);
+        int width = (int)Math.Round(widthInDips * VideoPanel.CompositionScaleX);
+        int height = (int)Math.Round(heightInDips * VideoPanel.CompositionScaleY);
 
         if (width <= 0 || height <= 0)
         {
@@ -287,6 +312,20 @@ public sealed partial class MainWindow : Window, IDisposable
             Marshal.ThrowExceptionForHR(native.SetSwapChain(_renderer.SwapChain.NativePointer));
 
             _renderer.RenderFailed += OnRenderFailed;
+
+            // The attempt is not over yet. Create returns while the render
+            // thread is still starting, and the heaviest native work happens
+            // after that — so clearing the marker here would call the attempt a
+            // success before the part most likely to fault had run, and a crash
+            // on the first frame would repeat on every launch with the guard
+            // none the wiser. It is cleared when a frame actually reaches the
+            // screen, and on a clean shutdown for the case where the app is
+            // opened and closed without ever playing anything.
+            _renderer.FirstFramePresented += (_, _) =>
+            {
+                DiagnosticLog.Current.Write("render", "first frame presented");
+                RenderGuard.EndAttempt();
+            };
         }
 #pragma warning disable CA1031 // A missing GPU path must degrade, not crash.
         catch (Exception ex)
@@ -298,12 +337,9 @@ public sealed partial class MainWindow : Window, IDisposable
 
             DiagnosticLog.Current.WriteException("render", ex);
             ViewModel.ReportRenderFailure(ex.Message, DiagnosticLog.Current.Path);
-        }
-        finally
-        {
-            // Reaching this line at all is the thing being recorded. Whether the
-            // pipeline was built or threw is beside the point: an exception means
-            // the process survived, and that is what the next launch needs to know.
+
+            // An exception means the process survived, which is the whole
+            // question the marker answers. A managed failure needs no guard.
             RenderGuard.EndAttempt();
         }
     }
@@ -388,8 +424,18 @@ public sealed partial class MainWindow : Window, IDisposable
         e.Handled = true;
     }
 
-    private void OnVolumePointerPressed(object sender, PointerRoutedEventArgs e) =>
+    private void OnVolumePointerPressed(object sender, PointerRoutedEventArgs e)
+    {
         ViewModel.BeginVolumeAdjust();
+
+        // The click itself is a change, and it has already happened: the
+        // Slider's own class handler moves the thumb to the pointer and raises
+        // ValueChanged before this instance handler runs, so that first
+        // ValueChanged arrives while the gesture flag is still false and is
+        // discarded. Committing here is what makes a single click on the track
+        // set the volume, instead of moving the thumb and then springing back.
+        ViewModel.SetVolume(VolumeSlider.Value);
+    }
 
     private void OnVolumePointerReleased(object sender, PointerRoutedEventArgs e) =>
         ViewModel.EndVolumeAdjust();
@@ -443,8 +489,7 @@ public sealed partial class MainWindow : Window, IDisposable
             // app that has since closed — throws here. This is async void, so an
             // escaping exception reaches the unhandled handler and kills the
             // process over a bad drop.
-            ViewModel.ErrorMessage = $"Could not read the dropped item: {ex.Message}";
-            ViewModel.ErrorVisibility = Visibility.Visible;
+            ViewModel.ReportTransientError($"Could not read the dropped item: {ex.Message}");
         }
         finally
         {
@@ -461,7 +506,36 @@ public sealed partial class MainWindow : Window, IDisposable
         // black band with a file name in it across the top.
         TitleBarGrid.Visibility = _isFullScreen ? Visibility.Collapsed : Visibility.Visible;
 
-        AppWindow.SetPresenter(_isFullScreen ? AppWindowPresenterKind.FullScreen : AppWindowPresenterKind.Overlapped);
+        if (_isFullScreen)
+        {
+            // Remembered because SetPresenter(Overlapped) returns a *default*
+            // overlapped presenter, not the one that was in use. A maximized
+            // window that goes full screen and comes back would otherwise come
+            // back restored, having quietly lost the state the user chose.
+            _stateBeforeFullScreen = (AppWindow.Presenter as OverlappedPresenter)?.State;
+            AppWindow.SetPresenter(AppWindowPresenterKind.FullScreen);
+            return;
+        }
+
+        AppWindow.SetPresenter(AppWindowPresenterKind.Overlapped);
+
+        if (_stateBeforeFullScreen is { } state
+            && AppWindow.Presenter is OverlappedPresenter presenter)
+        {
+            switch (state)
+            {
+                case OverlappedPresenterState.Maximized:
+                    presenter.Maximize();
+                    break;
+                case OverlappedPresenterState.Minimized:
+                    presenter.Minimize();
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        _stateBeforeFullScreen = null;
     }
 
     /// <summary>Shows the file picker and opens what the user chose.</summary>
@@ -492,8 +566,7 @@ public sealed partial class MainWindow : Window, IDisposable
         catch (Exception ex)
 #pragma warning restore CA1031
         {
-            ViewModel.ErrorMessage = $"Could not open the file picker: {ex.Message}";
-            ViewModel.ErrorVisibility = Visibility.Visible;
+            ViewModel.ReportTransientError($"Could not open the file picker: {ex.Message}");
         }
     }
 
@@ -510,6 +583,11 @@ public sealed partial class MainWindow : Window, IDisposable
     /// </remarks>
     public void Dispose()
     {
+        // Reaching a clean shutdown is itself proof the render path did not take
+        // the process down, and it covers the session where the app was opened
+        // and closed without a frame ever being drawn.
+        RenderGuard.EndAttempt();
+
         // Order matters: the renderer holds a libmpv render context that must be
         // freed before the handle it was created from.
         if (_renderer is not null)

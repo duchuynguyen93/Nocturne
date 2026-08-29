@@ -25,66 +25,67 @@ internal static unsafe class MpvNative
     private const string LibraryName = "mpv";
 
     /// <summary>
-    /// Registration is done once, by the first caller, and every other caller
-    /// blocks until it has finished.
+    /// Assemblies whose import resolver has already been installed.
     /// </summary>
     /// <remarks>
-    /// A flag set with <see cref="Interlocked"/> would let a second thread see
-    /// "registered" while the registration call was still running, and P/Invoke
-    /// before the resolver existed — an intermittent
-    /// <see cref="DllNotFoundException"/> that would be miserable to chase.
+    /// <para>
+    /// <see cref="NativeLibrary.SetDllImportResolver"/> is scoped to a single
+    /// assembly <em>and</em> throws <see cref="InvalidOperationException"/> if
+    /// called twice for the same one. Both facts matter here: the render layer
+    /// declares its own P/Invokes against the logical <c>mpv</c> name, so it
+    /// needs its own registration, and the bookkeeping that gives it one must
+    /// not register anybody twice.
+    /// </para>
+    /// <para>
+    /// The set and the registration call are inside one lock rather than a
+    /// <see cref="Lazy{T}"/> over a list. The previous shape added the assembly
+    /// to a list, registered it, and only then materialised the lazy — which,
+    /// on the very first call, walked that list and registered the same
+    /// assembly a second time. It never fired because the window happened to
+    /// initialise the engine before the renderer, and a <see cref="Lazy{T}"/>
+    /// caches the exception forever, so the whole app would have failed every
+    /// later libmpv call rather than the one that tripped it.
+    /// </para>
     /// </remarks>
-    private static readonly Lazy<bool> Registration = new(RegisterResolvers, isThreadSafe: true);
+    private static readonly HashSet<Assembly> Registered = [];
 
     /// <summary>
-    /// Installs the import resolver. Safe to call more than once.
+    /// Installs the import resolver for this assembly. Safe to call repeatedly.
     /// </summary>
-    internal static void EnsureResolverRegistered() => _ = Registration.Value;
-
-    private static bool RegisterResolvers()
-    {
-        // Once per assembly that declares a DllImport against the logical name.
-        // SetDllImportResolver is scoped to one assembly, so registering only
-        // for this one leaves every P/Invoke elsewhere — notably the render API
-        // in Nocturne.Render — probing for a bare "mpv.dll" that does not exist.
-        foreach (Assembly assembly in ResolvedAssemblies)
-        {
-            NativeLibrary.SetDllImportResolver(assembly, Resolve);
-        }
-
-        return true;
-    }
+    internal static void EnsureResolverRegistered() => Register(typeof(MpvNative).Assembly);
 
     /// <summary>
-    /// Assemblies whose <c>DllImport</c>s name the logical <c>mpv</c> library.
+    /// Installs the import resolver for another assembly that P/Invokes libmpv.
     /// </summary>
     /// <remarks>
-    /// Registered here rather than by each assembly calling for itself, so that
-    /// adding a new interop assembly is one line in one place instead of a
-    /// silent failure at the first call.
+    /// Must be called before that assembly's first libmpv call, and safe to call
+    /// in any order relative to <see cref="EnsureResolverRegistered"/>.
     /// </remarks>
-    private static readonly List<Assembly> ResolvedAssemblies = [typeof(MpvNative).Assembly];
-
-    /// <summary>
-    /// Adds an assembly whose P/Invokes should resolve through this resolver.
-    /// </summary>
-    /// <remarks>Must be called before that assembly's first P/Invoke.</remarks>
     internal static void RegisterCallingAssembly(Assembly assembly)
     {
         ArgumentNullException.ThrowIfNull(assembly);
 
-        lock (ResolvedAssemblies)
+        // This assembly's own registration is not implied by the caller's, and a
+        // caller that reaches here first must not leave it unregistered.
+        EnsureResolverRegistered();
+        Register(assembly);
+    }
+
+    private static void Register(Assembly assembly)
+    {
+        // Held across the registration call, not merely around the set. A flag
+        // released early would let a second thread see "registered" while the
+        // call was still running and P/Invoke before the resolver existed — an
+        // intermittent DllNotFoundException, which is the worst kind.
+        lock (Registered)
         {
-            if (ResolvedAssemblies.Contains(assembly))
+            if (!Registered.Add(assembly))
             {
                 return;
             }
 
-            ResolvedAssemblies.Add(assembly);
+            NativeLibrary.SetDllImportResolver(assembly, Resolve);
         }
-
-        NativeLibrary.SetDllImportResolver(assembly, Resolve);
-        _ = Registration.Value;
     }
 
     private static nint Resolve(string libraryName, Assembly assembly, DllImportSearchPath? searchPath)

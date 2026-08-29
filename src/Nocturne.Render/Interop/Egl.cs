@@ -159,8 +159,15 @@ internal static unsafe class Egl
     /// passed to <see cref="GetPlatformDisplay"/> under
     /// <see cref="EGL_PLATFORM_DEVICE_EXT"/>.
     /// </remarks>
+    /// <remarks>
+    /// The attribute list is <c>EGLAttrib*</c> — pointer-sized, unlike the
+    /// <c>EGLint*</c> that <see cref="GetPlatformDisplay"/> takes. Only
+    /// <see langword="null"/> is passed today; declaring it as <c>int*</c>
+    /// would leave the next person to add a real attribute with entries read
+    /// four bytes apart on x64.
+    /// </remarks>
     [DllImport(EglLibrary, EntryPoint = "eglCreateDeviceANGLE")]
-    internal static extern nint CreateDeviceAngle(int deviceType, nint device, int* attributes);
+    internal static extern nint CreateDeviceAngle(int deviceType, nint device, nint* attributes);
 
     [DllImport(EglLibrary, EntryPoint = "eglReleaseDeviceANGLE")]
     internal static extern int ReleaseDeviceAngle(nint device);

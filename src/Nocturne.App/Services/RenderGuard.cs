@@ -75,6 +75,15 @@ public static class RenderGuard
     /// </remarks>
     public static void EndAttempt() => WriteMarker(exists: false);
 
+    /// <summary>Raised when the marker could not be written or removed.</summary>
+    /// <remarks>
+    /// A failed delete is not harmless: the next launch reads the leftover
+    /// marker as a crash and turns the video path off for a run that was
+    /// perfectly healthy. Swallowing that silently leaves no way to tell the
+    /// two apart, so it is reported for the log rather than kept quiet.
+    /// </remarks>
+    public static event Action<string>? Failed;
+
     private static void WriteMarker(bool exists)
     {
         if (_markerPath is null)
@@ -93,10 +102,12 @@ public static class RenderGuard
                 File.Delete(_markerPath);
             }
         }
-#pragma warning disable CA1031 // Same again.
-        catch (Exception)
+#pragma warning disable CA1031 // A guard that throws is worse than no guard.
+        catch (Exception error)
 #pragma warning restore CA1031
         {
+            Failed?.Invoke(
+                $"{(exists ? "writing" : "removing")} {_markerPath} failed: {error.Message}");
         }
     }
 }

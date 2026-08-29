@@ -58,6 +58,7 @@ public sealed class PlayerViewModel : ObservableBase, IDisposable
 
     private bool _isScrubbing;
     private string? _renderFailure;
+    private string? _transientError;
     private bool _disposed;
 
     /// <summary>Creates the view model over an engine.</summary>
@@ -175,6 +176,9 @@ public sealed class PlayerViewModel : ObservableBase, IDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
+        // Whatever went wrong last time was about the previous request.
+        _transientError = null;
+
         LoadSiblingQueue(path);
         _engine.Open(path);
     }
@@ -223,8 +227,19 @@ public sealed class PlayerViewModel : ObservableBase, IDisposable
     public void BeginScrub() => _isScrubbing = true;
 
     /// <summary>Commits a scrub gesture and resumes following the engine.</summary>
+    /// <remarks>
+    /// Guarded on the flag because the window commits from more than one event —
+    /// a release and a capture loss both mean "the drag is over", and the slider
+    /// raises both for an ordinary click. Without the guard the second one seeks
+    /// again to the position the first one had already left behind.
+    /// </remarks>
     public void EndScrub(double fraction)
     {
+        if (!_isScrubbing)
+        {
+            return;
+        }
+
         _isScrubbing = false;
 
         if (SeekMath.FromTrackFraction(fraction, _engine.Snapshot.Duration) is { } target)
@@ -235,12 +250,20 @@ public sealed class PlayerViewModel : ObservableBase, IDisposable
 
     /// <summary>Abandons a scrub gesture without seeking.</summary>
     /// <remarks>
-    /// Needed for pointer capture loss — a drag interrupted by an alt-tab or a
-    /// touch cancellation never sends a release, and leaving
-    /// <c>_isScrubbing</c> latched would freeze the seek bar for good.
+    /// For a genuinely cancelled gesture only — a touch the system took away, a
+    /// drag interrupted by something that is not the user letting go. Losing
+    /// pointer capture is <em>not</em> that: a slider releases capture as part
+    /// of an ordinary click, so treating capture loss as a cancellation put the
+    /// old position back on every seek, and the thumb sprang backwards under the
+    /// pointer each time.
     /// </remarks>
     public void CancelScrub()
     {
+        if (!_isScrubbing)
+        {
+            return;
+        }
+
         _isScrubbing = false;
         Progress = _engine.Snapshot.Progress;
     }
@@ -261,11 +284,13 @@ public sealed class PlayerViewModel : ObservableBase, IDisposable
     public void BeginVolumeAdjust() => IsAdjustingVolume = true;
 
     /// <summary>Ends a volume gesture.</summary>
-    public void EndVolumeAdjust()
-    {
-        IsAdjustingVolume = false;
-        Volume = _engine.Snapshot.Volume;
-    }
+    /// <remarks>
+    /// It does not write the engine's value back. The engine echoes the new
+    /// volume a few milliseconds later and the binding picks it up then; writing
+    /// the pre-gesture value here first made the slider jump back to where it
+    /// started and then forward again, on every adjustment.
+    /// </remarks>
+    public void EndVolumeAdjust() => IsAdjustingVolume = false;
 
     /// <summary>Sets output volume, 0–100.</summary>
     public void SetVolume(double volume) => _engine.SetVolume(volume);
@@ -292,7 +317,24 @@ public sealed class PlayerViewModel : ObservableBase, IDisposable
         ErrorMessage = _renderFailure;
         ErrorVisibility = Visibility.Visible;
         EmptyStateVisibility = Visibility.Collapsed;
-        TransportVisibility = Visibility.Collapsed;
+    }
+
+    /// <summary>
+    /// Shows a message about something the user just did, until the next file.
+    /// </summary>
+    /// <remarks>
+    /// A dropped item that could not be read, a file picker that would not open:
+    /// these are reported by the window itself, not by the engine, and writing
+    /// straight to <see cref="ErrorMessage"/> put them at the mercy of the next
+    /// snapshot — which arrives several times a second while anything is
+    /// playing. The message appeared and vanished before it could be read.
+    /// </remarks>
+    public void ReportTransientError(string message)
+    {
+        _transientError = message;
+        ErrorMessage = message;
+        ErrorVisibility = Visibility.Visible;
+        EmptyStateVisibility = Visibility.Collapsed;
     }
 
     /// <inheritdoc />
@@ -358,6 +400,15 @@ public sealed class PlayerViewModel : ObservableBase, IDisposable
         // press it — and could skip two items or tear a list mid-rebuild.
         _dispatcher.TryEnqueue(() =>
         {
+            // The window can close between the enqueue above and this running:
+            // a file ending as someone closes the window is not a rare
+            // coincidence, it is when files end. Opening on a disposed engine
+            // throws ObjectDisposedException on the UI thread during shutdown.
+            if (_disposed)
+            {
+                return;
+            }
+
             // Deliberately not user-initiated, so repeat-one replays rather than
             // advancing.
             if (_playlist.MoveNext() is { } next)
@@ -411,19 +462,31 @@ public sealed class PlayerViewModel : ObservableBase, IDisposable
         // would flash the one diagnostic the user needs and then hide it. On a
         // machine with no ANGLE, which today means every machine, that reads as
         // "the app opened and did nothing".
+        // The transport bar stays. The card says audio still works, and hiding
+        // the play button, the volume slider and the seek bar underneath that
+        // sentence left the keyboard as the only way to act on it — with nothing
+        // on screen saying so.
+        TransportVisibility = snapshot.HasMedia ? Visibility.Visible : Visibility.Collapsed;
+
         if (_renderFailure is not null)
         {
             ErrorMessage = _renderFailure;
             ErrorVisibility = Visibility.Visible;
             EmptyStateVisibility = Visibility.Collapsed;
-            TransportVisibility = Visibility.Collapsed;
+            return;
+        }
+
+        if (_transientError is not null)
+        {
+            ErrorMessage = _transientError;
+            ErrorVisibility = Visibility.Visible;
+            EmptyStateVisibility = Visibility.Collapsed;
             return;
         }
 
         ErrorMessage = snapshot.ErrorMessage;
         ErrorVisibility = snapshot.Status == PlaybackStatus.Failed ? Visibility.Visible : Visibility.Collapsed;
         EmptyStateVisibility = snapshot.Status == PlaybackStatus.Idle ? Visibility.Visible : Visibility.Collapsed;
-        TransportVisibility = snapshot.HasMedia ? Visibility.Visible : Visibility.Collapsed;
     }
 
     /// <summary>

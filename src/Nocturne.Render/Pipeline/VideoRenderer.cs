@@ -61,6 +61,7 @@ public sealed unsafe class VideoRenderer : IDisposable
     private int _surfaceWidth;
     private int _surfaceHeight;
     private volatile bool _resizeRequested;
+    private bool _hasPresented;
     private bool _disposed;
 
     private VideoRenderer(nint instanceKey)
@@ -81,6 +82,17 @@ public sealed unsafe class VideoRenderer : IDisposable
     /// <summary>Raised when the render thread fails and playback has stopped.</summary>
     /// <remarks>Raised on the render thread.</remarks>
     public event EventHandler<Exception>? RenderFailed;
+
+    /// <summary>Raised once, after the first frame reaches the screen.</summary>
+    /// <remarks>
+    /// Raised on the render thread. Building the pipeline and drawing through it
+    /// are different things: construction returns while the render thread is
+    /// still starting, and the heaviest native work — libmpv compiling its
+    /// shaders, the driver's first real draw — happens afterwards. Anything that
+    /// wants to know the pipeline actually works has to wait for this rather
+    /// than for the constructor.
+    /// </remarks>
+    public event EventHandler? FirstFramePresented;
 
     /// <summary>
     /// The swap chain to hand to <c>ISwapChainPanelNative.SetSwapChain</c>.
@@ -149,7 +161,10 @@ public sealed unsafe class VideoRenderer : IDisposable
     /// </remarks>
     public void Resize(int width, int height)
     {
-        if (width <= 0 || height <= 0)
+        // A layout pass can reach a renderer that has already been disposed —
+        // this is a public method, and _frameAvailable.Set() on a disposed event
+        // throws on the caller's thread, which here is the UI thread.
+        if (_disposed || width <= 0 || height <= 0)
         {
             return;
         }
@@ -253,6 +268,25 @@ public sealed unsafe class VideoRenderer : IDisposable
 
     private void CreateRenderSurface(int width, int height)
     {
+        (_renderTexture, _eglSurface) = BuildRenderSurface(width, height);
+        _surfaceWidth = width;
+        _surfaceHeight = height;
+    }
+
+    /// <summary>
+    /// Builds a render texture and the EGL surface that wraps it, touching no
+    /// state of its own.
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="CreateRenderSurface"/> so a resize can build the
+    /// replacement before letting go of what it already has. Tearing the old
+    /// surface down first means a failure halfway through leaves the renderer
+    /// with neither — and the render thread then dies holding EGL_NO_SURFACE,
+    /// which turns disposal into a call to mpv_render_context_free with no
+    /// current context.
+    /// </remarks>
+    private (ID3D11Texture2D Texture, nint Surface) BuildRenderSurface(int width, int height)
+    {
         var description = new Texture2DDescription
         {
             Width = (uint)width,
@@ -267,7 +301,7 @@ public sealed unsafe class VideoRenderer : IDisposable
             MiscFlags = ResourceOptionFlags.None,
         };
 
-        _renderTexture = _device.CreateTexture2D(description);
+        ID3D11Texture2D texture = _device.CreateTexture2D(description);
 
         // No EGL_WIDTH/EGL_HEIGHT here. With buftype EGL_D3D_TEXTURE_ANGLE the
         // size comes from the texture itself, and some ANGLE builds reject those
@@ -281,15 +315,16 @@ public sealed unsafe class VideoRenderer : IDisposable
             Egl.EGL_NONE,
         };
 
-        _eglSurface = Egl.CreatePbufferFromClientBuffer(
+        nint surface = Egl.CreatePbufferFromClientBuffer(
             _angle.Display,
             Egl.EGL_D3D_TEXTURE_ANGLE,
-            _renderTexture.NativePointer,
+            texture.NativePointer,
             _angle.Config,
             surfaceAttributes);
 
-        if (_eglSurface == Egl.EGL_NO_SURFACE)
+        if (surface == Egl.EGL_NO_SURFACE)
         {
+            texture.Dispose();
             throw new RenderInitializationException(
                 "eglCreatePbufferFromClientBuffer refused the render texture " +
                 $"({description.Format}, {width}x{height}): {Egl.DescribeLastError()}. " +
@@ -297,8 +332,7 @@ public sealed unsafe class VideoRenderer : IDisposable
                 "or the texture format does not match the chosen EGL config.");
         }
 
-        _surfaceWidth = width;
-        _surfaceHeight = height;
+        return (texture, surface);
     }
 
     private void CreateMpvRenderContext(nint mpvHandle)
@@ -457,11 +491,24 @@ public sealed unsafe class VideoRenderer : IDisposable
 
         // Sync interval 1: present on the next vertical blank. libmpv's
         // display-resample timing is built on frames landing at that cadence.
-        _swapChain.Present(1, PresentFlags.None);
+        //
+        // The result is checked because this is where a lost device shows up.
+        // After a TDR, Present returns DXGI_ERROR_DEVICE_REMOVED for the rest of
+        // the process's life; discarding that means the loop keeps calling
+        // ContextReportSwap below, feeding libmpv a steady rhythm of swaps that
+        // never reached a screen. The picture freezes, the sound plays on, and
+        // nothing anywhere says why.
+        _swapChain.Present(1, PresentFlags.None).CheckError();
 
         // libmpv derives its frame scheduling from these reports. Skipping them
         // is what turns 23.976 fps content into visible judder.
         MpvRenderNative.ContextReportSwap(_renderContext);
+
+        if (!_hasPresented)
+        {
+            _hasPresented = true;
+            FirstFramePresented?.Invoke(this, EventArgs.Empty);
+        }
     }
 
     private void ApplyPendingResize()
@@ -480,28 +527,56 @@ public sealed unsafe class VideoRenderer : IDisposable
             return;
         }
 
-        // Order matters. The EGL surface holds a reference to the texture, so it
-        // is released first; the swap chain buffers cannot be resized while a
-        // back buffer reference is outstanding, so nothing may hold one here.
-        _angle.ClearCurrent();
+        // Build the replacement before giving up what is already working, so a
+        // failure anywhere below leaves a renderer that still has a valid
+        // surface rather than one holding EGL_NO_SURFACE. The render texture is
+        // not a back buffer, so holding it does not block ResizeBuffers.
+        (ID3D11Texture2D texture, nint surface) = BuildRenderSurface(width, height);
+
+        try
+        {
+            _angle.ClearCurrent();
+
+            // Checked, not discarded. Vortice returns a Result here rather than
+            // throwing, and a device removed by a driver reset or a TDR fails
+            // exactly here. Carrying on would leave the swap chain at the old
+            // size and the render texture at the new one, and CopyResource
+            // between two different sizes is undefined — in practice the runtime
+            // drops it and the picture freezes with nothing logged anywhere.
+            _swapChain.ResizeBuffers(
+                BufferCount,
+                (uint)width,
+                (uint)height,
+                Format.B8G8R8A8_UNorm,
+                SwapChainFlags.None).CheckError();
+        }
+        catch
+        {
+            _ = Egl.DestroySurface(_angle.Display, surface);
+            texture.Dispose();
+
+            // Put the context back on the surface still in use, so the thread
+            // that unwinds through here leaves the renderer as it found it.
+            if (_eglSurface != Egl.EGL_NO_SURFACE)
+            {
+                _angle.MakeCurrent(_eglSurface);
+            }
+
+            throw;
+        }
 
         if (_eglSurface != Egl.EGL_NO_SURFACE)
         {
             _ = Egl.DestroySurface(_angle.Display, _eglSurface);
-            _eglSurface = Egl.EGL_NO_SURFACE;
         }
 
         _renderTexture?.Dispose();
-        _renderTexture = null;
 
-        _swapChain.ResizeBuffers(
-            BufferCount,
-            (uint)width,
-            (uint)height,
-            Format.B8G8R8A8_UNorm,
-            SwapChainFlags.None);
+        _renderTexture = texture;
+        _eglSurface = surface;
+        _surfaceWidth = width;
+        _surfaceHeight = height;
 
-        CreateRenderSurface(width, height);
         _angle.MakeCurrent(_eglSurface);
     }
 
