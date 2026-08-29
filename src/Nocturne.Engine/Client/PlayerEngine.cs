@@ -26,7 +26,21 @@ public sealed class PlayerEngine : IDisposable
     // net8.0 to match the runtime the app ships against, and Lock is net9.0+.
     private readonly object _snapshotLock = new();
 
+    // Guards _publishedVersion, which orders SnapshotChanged against itself.
+    // Mutate can be called from both the UI thread (Open, Stop, ...) and the
+    // event thread (property change, end-of-file), and computing the new
+    // snapshot happens under _snapshotLock while the Invoke happens after it
+    // is released — two threads can each finish their own compute-then-invoke
+    // sequence in an order that does not match the order they entered
+    // _snapshotLock in. Without this check, a thread that computed an older
+    // snapshot but got preempted before Invoke could publish it after a
+    // newer snapshot already went out, leaving subscribers holding a stale
+    // state until the next unrelated property change overwrote it.
+    private readonly object _publishLock = new();
+
     private PlaybackSnapshot _snapshot = PlaybackSnapshot.Idle;
+    private long _version;
+    private long _publishedVersion;
     private bool _disposed;
 
     /// <summary>Creates and initializes the engine.</summary>
@@ -319,6 +333,7 @@ public sealed class PlayerEngine : IDisposable
     private void Mutate(Func<PlaybackSnapshot, PlaybackSnapshot> transform)
     {
         PlaybackSnapshot updated;
+        long version;
         lock (_snapshotLock)
         {
             PlaybackSnapshot previous = _snapshot;
@@ -329,8 +344,42 @@ public sealed class PlayerEngine : IDisposable
             }
 
             _snapshot = updated;
+            version = ++_version;
         }
 
-        SnapshotChanged?.Invoke(this, updated);
+        // The raise happens inside _publishLock, not merely the bookkeeping.
+        //
+        // Checking the version and then raising outside the lock does not fix
+        // anything: two threads can both pass the check, both record their
+        // version, and then raise in either order — which is the reordering this
+        // is here to prevent. Serialising the raise itself is the whole point.
+        //
+        // It is a different lock from _snapshotLock, which is what makes this
+        // safe against deadlock: a subscriber that calls back into the engine
+        // takes _snapshotLock and never waits on _publishLock.
+        //
+        // Safe against deadlock is not the same as safe against reordering, and
+        // the difference matters if this ever gains a second subscriber. Monitor
+        // is re-entrant, so a handler that calls straight back into the engine on
+        // this thread publishes version n+1 nested inside the raise of version n
+        // — and the remaining subscribers of the outer raise then receive n after
+        // n+1. With the single subscriber this has, which posts to a dispatcher
+        // and returns, that cannot happen. A second one would need this to
+        // detect re-entry and defer, rather than nest.
+        //
+        // The constraint this places on subscribers is that a handler must not
+        // block, because it holds up every later snapshot while it runs. The one
+        // subscriber in the app posts to the UI thread's dispatcher and returns
+        // immediately, which is the shape this asks for.
+        lock (_publishLock)
+        {
+            if (version < _publishedVersion)
+            {
+                return;
+            }
+
+            _publishedVersion = version;
+            SnapshotChanged?.Invoke(this, updated);
+        }
     }
 }

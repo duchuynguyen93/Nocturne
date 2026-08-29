@@ -65,6 +65,31 @@ this file is where that distinction is kept honest.
   `docs/RENDERING.md`, `docs/UI_SPEC.md`, `docs/DEVELOPMENT.md`,
   `docs/WINDOWS_HANDOFF.md`, `docs/LICENSING.md`, and three ADRs.
 
+### Changed
+
+- **Correction: `target-colorspace-hint` was never read, so turning it off fixed
+  nothing.** It was blamed for HDR files rendering as a white rectangle, and the
+  reasoning — that the option promises the presenter will honour the signalled
+  colour space, so libmpv stops tone-mapping — describes a real mechanism that is
+  not on this render path. The option is read only by `vo_gpu_next`; mpv's manual
+  marks it gpu-next only. **The white rectangle is unexplained and still open.**
+
+- **The renderer is `vo_gpu`, not `gpu-next`.** Several comments, the README, the
+  plan and ADR 0001 said this project renders through libplacebo. It does not, and
+  it cannot from where it stands: `vo_libmpv` registers two backends, `gpu` and
+  `sw`, and the OpenGL render API reaches `gl_video` — the older renderer. There
+  is no render API type that selects libplacebo. Every quality option set here is
+  a real `vo_gpu` option and does take effect; what was wrong was the reason
+  written beside them. ADR 0001 carries a correction rather than a rewrite,
+  because the decision it records still stands.
+
+- `gpu-api=opengl` removed. It configures the context mpv creates for itself, and
+  this app supplies the context, so nothing read it.
+
+- `tone-mapping=bt.2390` set explicitly. `auto` resolves to it on this renderer,
+  so nothing changes today — but the default differs between renderers, and the
+  day this moves off `vo_gpu` is not the day to find that out.
+
 ### Fixed
 
 Findings from four independent reviews of the render, engine, and app layers,
@@ -180,9 +205,8 @@ the test was written first and failed first.
   sRGB are enormously too bright — hence white, not merely wrong. SDR files were
   unaffected, which is why it survived every earlier test.
 
-  The hint is off. libplacebo now tone-maps HDR to the SDR target itself, which
-  is one of the reasons `gpu-next` was chosen. `docs/RENDERING.md` records the
-  four things that must land together before it can be turned back on.
+  The hint is off. **This explanation was wrong — see the correction under
+  Changed.**
 
 - The log records what was actually decoded, once per file: codec, resolution,
   pixel format, primaries, transfer function, matrix, signal peak and the active

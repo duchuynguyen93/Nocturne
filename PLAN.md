@@ -20,7 +20,7 @@ criteria have been observed on real Windows hardware and recorded in
 A Windows desktop media player that:
 
 - plays whatever FFmpeg plays, with hardware decoding;
-- renders through libplacebo, with correct scaling, debanding, and frame timing;
+- renders through mpv's GPU renderer, with correct scaling, debanding, and frame timing;
 - presents an interface that composes over the video rather than boxing it in;
 - opens instantly, remembers nothing it does not need to, and reports nothing.
 

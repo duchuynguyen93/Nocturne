@@ -360,7 +360,8 @@ public sealed unsafe class MpvClient : IDisposable
 
         while (!token.IsCancellationRequested)
         {
-            nint eventPointer;
+            MarshaledEvent? marshaled;
+            Exception? marshalFailure = null;
             _lifetimeLock.EnterReadLock();
             try
             {
@@ -372,30 +373,58 @@ public sealed unsafe class MpvClient : IDisposable
                 // A finite timeout rather than -1: it bounds how long disposal
                 // can wait even if the wakeup is lost, and costs one wakeup per
                 // second while idle.
-                eventPointer = MpvNative.WaitEvent(_handle, 1.0);
+                nint eventPointer = MpvNative.WaitEvent(_handle, 1.0);
+
+                // Marshal everything the event points to right here, still under
+                // the read lock. mpv_event and anything it references — the
+                // property value, every string — are only guaranteed valid until
+                // the next mpv_wait_event on this handle or until the handle is
+                // destroyed, whichever comes first. Disposal's Join(2s) times out
+                // and calls mpv_terminate_destroy regardless of whether the pump
+                // is still running, so a pump that read this data after releasing
+                // the lock could dereference memory libmpv had already freed.
+                // Caught here, and reported after the lock is released.
+                //
+                // Moving the marshalling under the lock took it out from behind
+                // the handler catch further down, where it used to sit: reading
+                // a string allocates, and an exception escaping this loop ends
+                // the process, because the pump is a background thread. One
+                // malformed event is not worth the whole player.
+                //
+                // Reported after ExitReadLock rather than here, because
+                // reporting invokes subscribers, a subscriber may call back into
+                // the client, and this lock does not allow recursive acquisition.
+                try
+                {
+                    marshaled = eventPointer == nint.Zero ? null : MarshalEvent(eventPointer);
+                }
+#pragma warning disable CA1031 // One bad event must not stop the pump.
+                catch (Exception error)
+#pragma warning restore CA1031
+                {
+                    marshaled = null;
+                    marshalFailure = error;
+                }
             }
             finally
             {
                 _lifetimeLock.ExitReadLock();
             }
 
-            if (eventPointer == nint.Zero)
+            if (marshalFailure is not null)
             {
+                RaiseLogSafely("error", $"Reading an event from libmpv failed: {marshalFailure}");
                 continue;
             }
 
-            // Copy out before releasing: the pointer is only valid until the
-            // next mpv_wait_event on this handle.
-            MpvEvent nativeEvent = Marshal.PtrToStructure<MpvEvent>(eventPointer);
-
-            if (nativeEvent.EventId == MpvEventId.None)
+            if (marshaled is null)
             {
                 continue;
             }
 
             try
             {
-                DispatchEvent(nativeEvent);
+                DispatchEvent(marshaled);
             }
 #pragma warning disable CA1031 // A handler that throws must not kill the pump.
             catch (Exception ex)
@@ -404,19 +433,81 @@ public sealed unsafe class MpvClient : IDisposable
                 RaiseLogSafely("error", $"Event handler threw: {ex}");
             }
 
-            if (nativeEvent.EventId == MpvEventId.Shutdown)
+            if (marshaled.EventId == MpvEventId.Shutdown)
             {
                 return;
             }
         }
     }
 
-    private void DispatchEvent(MpvEvent nativeEvent)
+    /// <summary>
+    /// One pump-thread event with every native payload already copied into
+    /// managed memory.
+    /// </summary>
+    /// <remarks>
+    /// Built by <see cref="MarshalEvent"/> while the read lock is still held.
+    /// <see cref="DispatchEvent"/> only invokes handlers off of this — never a
+    /// native pointer — because handlers run after the lock is released.
+    /// </remarks>
+    private sealed class MarshaledEvent
     {
-        switch (nativeEvent.EventId)
+        public required MpvEventId EventId { get; init; }
+
+        public MpvPropertyChangedEventArgs? PropertyChanged { get; init; }
+
+        public MpvEndFileEventArgs? EndFile { get; init; }
+
+        public MpvLogEventArgs? LogMessage { get; init; }
+    }
+
+    /// <summary>
+    /// Copies one native <c>mpv_event</c> and everything it points to into
+    /// managed memory.
+    /// </summary>
+    /// <remarks>
+    /// Must only be called while the caller still holds <see cref="_lifetimeLock"/>'s
+    /// read lock — see the caller in <see cref="PumpEvents"/> for why.
+    /// </remarks>
+    private static MarshaledEvent? MarshalEvent(nint eventPointer)
+    {
+        MpvEvent nativeEvent = Marshal.PtrToStructure<MpvEvent>(eventPointer);
+
+        return nativeEvent.EventId switch
+        {
+            MpvEventId.None => null,
+
+            MpvEventId.PropertyChange => new MarshaledEvent
+            {
+                EventId = nativeEvent.EventId,
+                PropertyChanged = MarshalPropertyChange(nativeEvent.Data),
+            },
+
+            MpvEventId.EndFile => new MarshaledEvent
+            {
+                EventId = nativeEvent.EventId,
+                EndFile = MarshalEndFile(nativeEvent.Data),
+            },
+
+            MpvEventId.LogMessage => new MarshaledEvent
+            {
+                EventId = nativeEvent.EventId,
+                LogMessage = MarshalLogMessage(nativeEvent.Data),
+            },
+
+            _ => new MarshaledEvent { EventId = nativeEvent.EventId },
+        };
+    }
+
+    private void DispatchEvent(MarshaledEvent marshaled)
+    {
+        switch (marshaled.EventId)
         {
             case MpvEventId.PropertyChange:
-                DispatchPropertyChange(nativeEvent.Data);
+                if (marshaled.PropertyChanged is { } propertyChanged)
+                {
+                    PropertyChanged?.Invoke(this, propertyChanged);
+                }
+
                 break;
 
             case MpvEventId.FileLoaded:
@@ -428,11 +519,19 @@ public sealed unsafe class MpvClient : IDisposable
                 break;
 
             case MpvEventId.EndFile:
-                DispatchEndFile(nativeEvent.Data);
+                if (marshaled.EndFile is { } endFile)
+                {
+                    EndFile?.Invoke(this, endFile);
+                }
+
                 break;
 
             case MpvEventId.LogMessage:
-                DispatchLogMessage(nativeEvent.Data);
+                if (marshaled.LogMessage is { } logMessage)
+                {
+                    LogMessage?.Invoke(this, logMessage);
+                }
+
                 break;
 
             case MpvEventId.Shutdown:
@@ -447,18 +546,18 @@ public sealed unsafe class MpvClient : IDisposable
         }
     }
 
-    private void DispatchPropertyChange(nint data)
+    private static MpvPropertyChangedEventArgs? MarshalPropertyChange(nint data)
     {
         if (data == nint.Zero)
         {
-            return;
+            return null;
         }
 
         MpvEventProperty property = Marshal.PtrToStructure<MpvEventProperty>(data);
         string? name = Utf8.Read(property.Name);
         if (name is null)
         {
-            return;
+            return null;
         }
 
         // A null Data means the property has no value at the moment — the normal
@@ -481,32 +580,32 @@ public sealed unsafe class MpvClient : IDisposable
             };
         }
 
-        PropertyChanged?.Invoke(this, new MpvPropertyChangedEventArgs(name, property.Format, value));
+        return new MpvPropertyChangedEventArgs(name, property.Format, value);
     }
 
-    private void DispatchEndFile(nint data)
+    private static MpvEndFileEventArgs? MarshalEndFile(nint data)
     {
         if (data == nint.Zero)
         {
-            return;
+            return null;
         }
 
         MpvEventEndFile endFile = Marshal.PtrToStructure<MpvEventEndFile>(data);
-        EndFile?.Invoke(this, new MpvEndFileEventArgs(endFile.Reason, (MpvError)endFile.Error));
+        return new MpvEndFileEventArgs(endFile.Reason, (MpvError)endFile.Error);
     }
 
-    private void DispatchLogMessage(nint data)
+    private static MpvLogEventArgs? MarshalLogMessage(nint data)
     {
         if (data == nint.Zero)
         {
-            return;
+            return null;
         }
 
         MpvEventLogMessage message = Marshal.PtrToStructure<MpvEventLogMessage>(data);
-        LogMessage?.Invoke(this, new MpvLogEventArgs(
+        return new MpvLogEventArgs(
             Utf8.Read(message.Prefix) ?? string.Empty,
             Utf8.Read(message.Level) ?? string.Empty,
-            (Utf8.Read(message.Text) ?? string.Empty).TrimEnd('\n')));
+            (Utf8.Read(message.Text) ?? string.Empty).TrimEnd('\n'));
     }
 
     /// <summary>

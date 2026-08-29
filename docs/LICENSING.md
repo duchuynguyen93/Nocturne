@@ -56,7 +56,7 @@ much further, and it supersedes the decision at the top of this file.
 | --- | --- | --- |
 | libmpv | LGPL 2.1+ or GPL 2+ | depends on build flags; default GPL |
 | FFmpeg | LGPL 2.1+ or GPL 2+ | GPL once x264/x265/postproc are enabled |
-| libplacebo | LGPL 2.1+ | mpv's `gpu-next` renderer |
+| libplacebo | LGPL 2.1+ | linked into the libmpv build; not on this app's render path |
 | libass | ISC | subtitle rendering |
 | ANGLE | BSD 3-clause | permissive; see `RENDERING.md` for where to obtain it |
 | Windows App SDK | MIT | |

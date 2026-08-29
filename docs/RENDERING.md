@@ -28,7 +28,7 @@ both at once.
      │  FFmpeg demux + D3D11VA hardware decode          (inside libmpv)
      ▼
    NV12 texture on the GPU
-     │  libplacebo: scale, deband, dither, tone map     (inside libmpv)
+     │  vo_gpu renderer: scale, deband, dither, tone map (inside libmpv)
      ▼
    GL framebuffer  ──── ANGLE translates GL → D3D11 ────┐
                                                         ▼
@@ -81,7 +81,7 @@ initialize; not shippable.
 
 **Media Foundation instead of libmpv.** `MediaPlayerElement` composes correctly
 with XAML with no work at all, and its renderer is not in the same category:
-no libplacebo, no configurable scaling kernels, no debanding, no shader support,
+no configurable scaling kernels, no debanding, no shader support,
 and codec coverage limited to what the OS ships.
 
 ## 4. Risks
@@ -182,32 +182,47 @@ The general shape is worth keeping in mind for the rest of this file: a
 correction that is obviously necessary in the abstract may already have been
 applied by a layer in between.
 
-### Risk 3 — HDR is not wired up (partly realised 2026-08-30)
+### Risk 3 — HDR is not wired up, and the last explanation of it was wrong
 
-The swap chain is `B8G8R8A8_UNorm` in the default sRGB colour space. Nothing sets
-`DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020`, and the EGL config is 8-bit. So the
-pipeline has no HDR output path.
+The swap chain is `B8G8R8A8_UNorm` in the default sRGB colour space, the EGL
+config is 8-bit, and nothing calls `SetColorSpace1`. There is no HDR output path.
 
-That was known. What was not accounted for is that `target-colorspace-hint=yes`
-shipped anyway, and **that option is a promise rather than a request**: it tells
-libmpv the presenting layer will honour the signalled colour space, so libmpv
-stops tone-mapping and hands over PQ-encoded values unchanged. Presented as sRGB,
-PQ values are enormously too bright — an HDR file did not look slightly wrong, it
-was a **white rectangle**, while SDR files in the same container played correctly.
-It read as a decoder bug and was a colour bug.
+**What this render path actually does with an HDR source.** `vo_gpu` refuses to
+emit HDR when the target does not declare it: with no `target-trc` set and no
+colour space on the framebuffer, it picks gamma 2.2 with a 203-nit peak and
+tone-maps down to it. The curve is `bt.2390`. So an HDR file is tone-mapped to
+SDR whatever this app does, and always was.
 
-The hint is now off, and libplacebo tone-maps HDR down to the SDR target itself,
-which is one of the reasons `gpu-next` was chosen in the first place.
+**The correction.** An earlier version of this section blamed a white rectangle
+on `target-colorspace-hint=yes` — the reasoning being that the option promises
+the presenting layer will honour the signalled colour space, so libmpv stops
+tone-mapping and hands over raw PQ. That mechanism is real, and it is not on this
+path: `target-colorspace-hint` is read only by `vo_gpu_next`, and mpv's manual
+marks it gpu-next only. Setting it here did nothing in either direction, so
+turning it off fixed nothing. **The cause of the white rectangle is unknown and
+still open.** The option has been removed rather than left at `no`, because a
+setting that does nothing is worse than absent: it invites the same explanation
+to be written again.
 
-Turning it back on is not a one-line change and must happen in a single commit
-with all of:
+The line to read next is the per-file `video` entry in the diagnostic log, which
+records primaries, transfer function and signal peak for whatever was decoded.
+
+**What an HDR target would actually take.** Not this option — the render API has
+no colour-space parameter at all. It is `target-trc=pq`, `target-prim=bt.2020`
+and `target-peak=<display peak>`, together with:
 
 1. the swap chain format changed to `R10G10B10A2`,
-2. `IDXGISwapChain3::SetColorSpace1` called with the PQ colour space,
+2. `IDXGISwapChain3::SetColorSpace1` with the PQ colour space,
 3. the EGL config and the FBO's `InternalFormat` moved to `GL_RGB10_A2`,
 4. a fallback for displays that report no HDR support.
 
-Anything less re-creates the white rectangle.
+**A smaller improvement available first.** `hdr-compute-peak` needs compute
+shaders and SSBOs, which is OpenGL ES 3.1. `AngleContext` asks for
+`EGL_CONTEXT_CLIENT_VERSION 3` with no minor version, so ANGLE returns ES 3.0
+and peak detection silently disables itself — tone mapping then works from static
+metadata, and a PQ file without metadata is treated as a 10,000-nit source and
+comes out much darker than it should. Requesting ES 3.1 with a fallback to 3.0
+would fix that without touching the swap chain.
 
 ### Risk 4 — no independent flip
 

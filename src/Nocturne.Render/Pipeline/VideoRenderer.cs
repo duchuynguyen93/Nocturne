@@ -83,6 +83,19 @@ public sealed unsafe class VideoRenderer : IDisposable
     /// <remarks>Raised on the render thread.</remarks>
     public event EventHandler<Exception>? RenderFailed;
 
+    /// <summary>
+    /// Whether disposal had to abandon native state instead of freeing it.
+    /// </summary>
+    /// <remarks>
+    /// True only when the render thread would not stop. The caller must then
+    /// <em>not</em> destroy the libmpv handle: <c>render.h</c> requires the
+    /// render context to be freed first, and this object has just declined to
+    /// free it because a live thread is still using it. Destroying the handle
+    /// anyway trades a leak that lasts until the process exits — which is
+    /// moments away — for an assertion or a hang inside libmpv on the way out.
+    /// </remarks>
+    public bool LeakedNativeState { get; private set; }
+
     /// <summary>Raised once, after the first frame reaches the screen.</summary>
     /// <remarks>
     /// Raised on the render thread. Building the pipeline and drawing through it
@@ -660,6 +673,12 @@ public sealed unsafe class VideoRenderer : IDisposable
             // process, which is strictly better than a use-after-free inside the
             // GPU driver with no usable stack. The comment used to claim this
             // and the code did the opposite.
+            //
+            // Recorded rather than merely reported, because it changes what the
+            // caller is allowed to do next: the libmpv handle must now outlive
+            // this object too.
+            LeakedNativeState = true;
+
             RenderFailed?.Invoke(
                 this,
                 new TimeoutException(

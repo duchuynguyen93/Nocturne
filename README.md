@@ -3,7 +3,7 @@
 A Windows media player built for picture quality first.
 
 Nocturne is a WinUI 3 shell over libmpv. The engine is the same one mpv uses —
-FFmpeg for decoding, libplacebo for rendering — and the app's job is to present
+FFmpeg for decoding, mpv's own GPU renderer for output — and the app's job is to present
 it well: a composition pipeline that keeps decoded frames on the GPU from
 demuxer to display, and an interface that stays out of the way of the picture.
 
@@ -25,7 +25,7 @@ Three decisions follow from that:
 **libmpv as the engine, not a hand-written FFmpeg pipeline.** Decoding is
 commodity — every player calls the same hardware decoder. What separates a good
 picture from a mediocre one is the renderer: scaling kernels, debanding,
-dithering, HDR tone mapping, and frame timing. libplacebo has a decade of work
+dithering, HDR tone mapping, and frame timing. mpv's renderer has a decade of work
 in it. Writing a replacement would take years to reach parity and would look
 worse the whole time.
 

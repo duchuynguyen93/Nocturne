@@ -590,14 +590,37 @@ public sealed partial class MainWindow : Window, IDisposable
 
         // Order matters: the renderer holds a libmpv render context that must be
         // freed before the handle it was created from.
+        bool renderStateLeaked = false;
         if (_renderer is not null)
         {
-            _renderer.RenderFailed -= OnRenderFailed;
+            // Unsubscribed after disposal, not before. Disposal is exactly when
+            // the renderer reports a render thread that would not stop, and
+            // unsubscribing first threw that one report away — the failure most
+            // worth knowing about was the only one guaranteed to go unheard.
             _renderer.Dispose();
+            renderStateLeaked = _renderer.LeakedNativeState;
+            _renderer.RenderFailed -= OnRenderFailed;
             _renderer = null;
         }
 
         ViewModel.Dispose();
+
+        if (renderStateLeaked)
+        {
+            // The render context could not be freed, so the handle it belongs to
+            // must not be destroyed: render.h requires the context to go first,
+            // and mpv_terminate_destroy with a live context asserts or hangs.
+            // Leaving both alive leaks them until the process exits, which is
+            // the next thing that happens.
+            DiagnosticLog.Current.Write(
+                "render",
+                "render thread would not stop; leaving the libmpv handle alive rather than " +
+                "destroying it under a live render context");
+
+            _engine = null;
+            return;
+        }
+
         _engine?.Dispose();
         _engine = null;
     }

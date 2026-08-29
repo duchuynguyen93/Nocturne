@@ -85,26 +85,22 @@ public sealed record EngineOptions
     /// </summary>
     /// <remarks>
     /// <para>
-    /// This is the HDR passthrough switch, and it is a promise, not a request.
-    /// Turning it on tells libmpv that whoever presents the frame will honour
-    /// the signalled colour space — so libmpv stops tone-mapping and hands over
-    /// PQ-encoded values as they are.
+    /// Kept as a property, and deliberately not sent to libmpv. It is read only
+    /// by <c>vo_gpu_next</c>, and this app runs the OpenGL render API, which is
+    /// served by the older <c>vo_gpu</c> renderer — so setting it in either
+    /// direction does nothing at all. mpv's own manual marks it gpu-next only.
     /// </para>
     /// <para>
-    /// This app cannot honour that yet. The swap chain is <c>B8G8R8A8_UNorm</c>
-    /// in the default sRGB colour space, and nothing sets
-    /// <c>DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020</c> on it. PQ values
-    /// presented as sRGB are enormously too bright: an HDR file rendered this
-    /// way is not merely wrong, it is a white rectangle. That is what shipped —
-    /// SDR files played correctly and HDR files came out blank, which read as a
-    /// decoder bug and was a colour bug.
+    /// It is worth a paragraph rather than a deletion because of what was once
+    /// written here. This option was blamed for HDR files rendering as a white
+    /// rectangle, and turning it off was recorded as the fix — an explanation
+    /// that reads well and that the source does not support. On this render path
+    /// the renderer forces an SDR target and tone-maps to it regardless, so the
+    /// cause of that white rectangle is still unknown.
     /// </para>
     /// <para>
-    /// With it off, libplacebo tone-maps HDR down to the SDR target itself,
-    /// which is one of the reasons <c>gpu-next</c> was chosen. Turn this back on
-    /// in the same change that switches the swap chain to
-    /// <c>R10G10B10A2</c> and sets its colour space — not before, and see
-    /// docs/RENDERING.md §Risk 3.
+    /// The route to an HDR target here is <c>target-trc</c>, <c>target-prim</c>
+    /// and <c>target-peak</c>, not this. See docs/RENDERING.md.
     /// </para>
     /// </remarks>
     public bool TargetColorspaceHint { get; init; }
@@ -143,9 +139,18 @@ public sealed record EngineOptions
             // Init-only. Puts libmpv in render-API mode; the app presents.
             ["vo"] = "libmpv",
 
-            // Init-only. gpu-next is the libplacebo renderer: better tone
-            // mapping, dithering, and scaling than the legacy gpu path.
-            ["gpu-api"] = "opengl",
+            // No gpu-api here, and no gpu-next.
+            //
+            // The OpenGL render API is served by vo_gpu, the older renderer —
+            // libmpv registers no gpu-next backend for it, and there is no
+            // render API type that selects libplacebo. Everything below is a
+            // vo_gpu option and takes effect; the difference from gpu-next is
+            // the quality of the implementations, not the set of settings.
+            //
+            // gpu-api itself was set here for a while. It belongs to the context
+            // creation code that runs when mpv makes its own GL or Vulkan
+            // context, and this app supplies the context, so nothing ever read
+            // it.
             ["vd-lavc-dr"] = "yes",
             ["hwdec"] = HardwareDecoding,
 
@@ -172,7 +177,13 @@ public sealed record EngineOptions
             // Off unless the presenting layer can actually honour the hint; see
             // the property's own remarks. Signalling a colour space nobody acts
             // on is how HDR files became white rectangles.
-            ["target-colorspace-hint"] = TargetColorspaceHint ? "yes" : "no",
+            // Tone-mapping curve, stated rather than left to auto.
+            //
+            // auto resolves to bt.2390 on this renderer, so this changes
+            // nothing today — which is the point. The default differs between
+            // renderers, and the day this app moves off vo_gpu is not the day
+            // to discover that the curve moved with it.
+            ["tone-mapping"] = "bt.2390",
 
             // Subtitles: prefer the embedded ASS styling the author chose over
             // the player's own, and load sidecars from the file's own directory.

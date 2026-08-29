@@ -77,7 +77,7 @@ public sealed class MpvLogEventArgs : EventArgs
         Text = text;
     }
 
-    /// <summary>Subsystem that emitted the line, such as <c>vo/gpu-next</c>.</summary>
+    /// <summary>Subsystem that emitted the line, such as <c>vo/gpu</c>.</summary>
     public string Prefix { get; }
 
     /// <summary>libmpv level name, such as <c>warn</c>.</summary>
