@@ -52,6 +52,7 @@ public sealed class PlayerEngine : IDisposable
         _client = new MpvClient(options.ToMpvOptions());
         _client.PropertyChanged += OnPropertyChanged;
         _client.FileLoaded += OnFileLoaded;
+        _client.VideoReconfig += OnVideoReconfig;
         _client.EndFile += OnEndFile;
         _client.LogMessage += OnLogMessage;
         _client.Shutdown += OnShutdown;
@@ -79,11 +80,26 @@ public sealed class PlayerEngine : IDisposable
     public event EventHandler<MpvLogEventArgs>? LogMessage;
 
     /// <summary>Raised once the current file's streams are known.</summary>
-    /// <remarks>
-    /// Raised on the engine's event thread. This is the first moment
-    /// <see cref="DescribeVideo"/> has anything to report.
-    /// </remarks>
+    /// <remarks>Raised on the engine's event thread.</remarks>
     public event EventHandler? FileLoaded;
+
+    /// <summary>
+    /// Raised when the video output has been configured for the current file.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Raised on the engine's event thread. This — not
+    /// <see cref="FileLoaded"/> — is the first moment
+    /// <see cref="DescribeVideo"/> has anything to report.
+    /// </para>
+    /// <para>
+    /// The distinction was learned the hard way. <c>video-params</c> is filled
+    /// in by the video output, and the video output is configured after the file
+    /// is loaded — so a description taken at file-loaded time came back as a row
+    /// of question marks, on the one run it was added to explain.
+    /// </para>
+    /// </remarks>
+    public event EventHandler? VideoConfigured;
 
     /// <summary>The current playback state.</summary>
     public PlaybackSnapshot Snapshot
@@ -204,6 +220,7 @@ public sealed class PlayerEngine : IDisposable
 
         _client.PropertyChanged -= OnPropertyChanged;
         _client.FileLoaded -= OnFileLoaded;
+        _client.VideoReconfig -= OnVideoReconfig;
         _client.EndFile -= OnEndFile;
         _client.LogMessage -= OnLogMessage;
         _client.Shutdown -= OnShutdown;
@@ -249,14 +266,25 @@ public sealed class PlayerEngine : IDisposable
 
         string Read(string name) => _client.GetString(name) ?? "?";
 
+        // Source and output are both reported, because they answer different
+        // halves of the same question. video-params is what the file says;
+        // video-out-params is what the renderer was actually handed after the
+        // filter chain. A picture that is wrong in a way the source cannot
+        // explain shows up as a difference between the two.
         return
-            $"{Read("video-codec")}, {Read("video-params/w")}x{Read("video-params/h")} " +
-            $"{Read("video-params/pixelformat")}, " +
-            $"primaries {Read("video-params/primaries")}, " +
+            $"{Read("video-codec")} {Read("video-params/w")}x{Read("video-params/h")} " +
+            $"{Read("video-params/pixelformat")} " +
+            $"| src: primaries {Read("video-params/primaries")}, " +
             $"transfer {Read("video-params/gamma")}, " +
             $"matrix {Read("video-params/colormatrix")}, " +
+            $"levels {Read("video-params/colorlevels")}, " +
             $"peak {Read("video-params/sig-peak")}, " +
-            $"hwdec {Read("hwdec-current")}";
+            $"max-luma {Read("video-params/max-luma")} " +
+            $"| out: {Read("video-out-params/pixelformat")}, " +
+            $"primaries {Read("video-out-params/primaries")}, " +
+            $"transfer {Read("video-out-params/gamma")}, " +
+            $"levels {Read("video-out-params/colorlevels")} " +
+            $"| hwdec {Read("hwdec-current")}, vo {Read("current-vo")}";
     }
 
     private void OnPropertyChanged(object? sender, MpvPropertyChangedEventArgs e) =>
@@ -297,6 +325,9 @@ public sealed class PlayerEngine : IDisposable
         Mutate(current => PlaybackSnapshotReducer.MarkLoaded(current, paused));
         FileLoaded?.Invoke(this, EventArgs.Empty);
     }
+
+    private void OnVideoReconfig(object? sender, EventArgs e) =>
+        VideoConfigured?.Invoke(this, EventArgs.Empty);
 
     private void OnEndFile(object? sender, MpvEndFileEventArgs e)
     {

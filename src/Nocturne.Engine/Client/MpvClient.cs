@@ -95,6 +95,15 @@ public sealed unsafe class MpvClient : IDisposable
     /// <summary>Raised when playback resumes after a seek or an initial load.</summary>
     public event EventHandler? PlaybackRestart;
 
+    /// <summary>Raised when the video output is configured for new parameters.</summary>
+    /// <remarks>
+    /// Later than <see cref="FileLoaded"/>, and that difference matters for
+    /// anything that wants to know the format: <c>video-params</c> is populated
+    /// by the video output, so at file-loaded time every field of it still reads
+    /// as unavailable.
+    /// </remarks>
+    public event EventHandler? VideoReconfig;
+
     /// <summary>Raised when libmpv emits a log line at or above the requested level.</summary>
     public event EventHandler<MpvLogEventArgs>? LogMessage;
 
@@ -516,6 +525,10 @@ public sealed unsafe class MpvClient : IDisposable
 
             case MpvEventId.PlaybackRestart:
                 PlaybackRestart?.Invoke(this, EventArgs.Empty);
+                break;
+
+            case MpvEventId.VideoReconfig:
+                VideoReconfig?.Invoke(this, EventArgs.Empty);
                 break;
 
             case MpvEventId.EndFile:

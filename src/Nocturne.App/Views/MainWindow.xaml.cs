@@ -56,10 +56,13 @@ public sealed partial class MainWindow : Window, IDisposable
         _engine.LogMessage += (_, message) =>
             DiagnosticLog.Current.Write($"mpv/{message.Level}", $"{message.Prefix}: {message.Text}");
 
-        // What was actually decoded, recorded once per file. Two files in the
-        // same container behaving differently is a colour question far more
-        // often than a codec one, and this is the line that answers it.
-        _engine.FileLoaded += (_, _) =>
+        // What was actually decoded, recorded when the video output is configured
+        // for it. Two files in the same container behaving differently is a
+        // colour question far more often than a codec one, and this is the line
+        // that answers it — but only from here. Hooked to FileLoaded, which is
+        // the obvious place, it ran before the video output existed and every
+        // field came back as a question mark.
+        _engine.VideoConfigured += (_, _) =>
         {
             try
             {

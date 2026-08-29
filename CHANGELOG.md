@@ -92,6 +92,15 @@ this file is where that distinction is kept honest.
 
 ### Fixed
 
+- **The per-file video description reported nothing.** It was hooked to
+  `FileLoaded`, which is the obvious event and the wrong one: `video-params` is
+  populated by the video output, and the video output is configured afterwards.
+  The one line added to explain a rendering bug came back as a row of question
+  marks on the first run it was asked about. It now runs on
+  `MPV_EVENT_VIDEO_RECONFIG`, and reports the output parameters beside the source
+  ones — a picture wrong in a way the source cannot explain shows up as a
+  difference between the two.
+
 Findings from four independent reviews of the render, engine, and app layers,
 plus a review that designed the test suite rather than looking for defects.
 Everything below was verified by reading the code; where a test could express it,
