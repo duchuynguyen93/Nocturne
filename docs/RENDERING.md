@@ -204,9 +204,14 @@ deselects the video track and plays the file as audio. The panel then displays a
 swap chain nothing has ever drawn into, whose contents are undefined and which
 in practice comes out white.
 
-That is why the same file played when opened from inside the app and came out
-blank when double-clicked in Explorer. The variable was never the file; it was
-how it was opened.
+That is why the same file played sometimes and came out blank other times. The
+variable was never the file, and it was not how it was opened either — both were
+double-clicks in Explorer. It was **whether the app was already running**.
+
+The first double-click starts a process and loses the race. A later one is
+redirected into the process that is already up, whose pipeline has been ready for
+minutes, and plays correctly. So the file that came out white was simply the
+first file of the session, whichever one that happened to be.
 
 **The rule this establishes: no file may be loaded before the render context
 exists.** `MainWindow.OpenOnLaunch` now holds the path until the pipeline has

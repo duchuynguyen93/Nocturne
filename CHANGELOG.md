@@ -109,9 +109,13 @@ this file is where that distinction is kept honest.
   ```
 
   It then plays the file as audio, and the panel shows a swap chain nothing has
-  ever drawn into — undefined contents, in practice white. The same file opened
-  from inside the running app was fine, which is what made this look like a
-  property of the file.
+  ever drawn into — undefined contents, in practice white.
+
+  What made it look like a property of the file is that the *same* file played
+  correctly when double-clicked again later: by then a Nocturne was already
+  running, the activation was redirected into it, and its pipeline had been ready
+  for minutes. The file that came out white was whichever one happened to be
+  opened first.
 
   A launch file is now held until the render pipeline has been attempted, and
   opened on every outcome: a pipeline that could not be built is a reason to play
