@@ -64,6 +64,13 @@ public sealed class PlayerEngine : IDisposable
     /// <summary>Raised for libmpv log lines at or above the configured level.</summary>
     public event EventHandler<MpvLogEventArgs>? LogMessage;
 
+    /// <summary>Raised once the current file's streams are known.</summary>
+    /// <remarks>
+    /// Raised on the engine's event thread. This is the first moment
+    /// <see cref="DescribeVideo"/> has anything to report.
+    /// </remarks>
+    public event EventHandler? FileLoaded;
+
     /// <summary>The current playback state.</summary>
     public PlaybackSnapshot Snapshot
     {
@@ -199,6 +206,33 @@ public sealed class PlayerEngine : IDisposable
         _ => MpvFormat.Double,
     };
 
+    /// <summary>
+    /// Describes the decoded video in one line, for the diagnostic log.
+    /// </summary>
+    /// <remarks>
+    /// Colour first, deliberately. When a file plays as a blank rectangle while
+    /// another file in the same container plays correctly, the difference is
+    /// almost never the container and almost always the transfer function: an
+    /// HDR source presented as if it were sRGB is not subtly wrong, it is white.
+    /// Having these four fields in the log turns that report into an answer
+    /// instead of a round trip.
+    /// </remarks>
+    public string DescribeVideo()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        string Read(string name) => _client.GetString(name) ?? "?";
+
+        return
+            $"{Read("video-codec")}, {Read("video-params/w")}x{Read("video-params/h")} " +
+            $"{Read("video-params/pixelformat")}, " +
+            $"primaries {Read("video-params/primaries")}, " +
+            $"transfer {Read("video-params/gamma")}, " +
+            $"matrix {Read("video-params/colormatrix")}, " +
+            $"peak {Read("video-params/sig-peak")}, " +
+            $"hwdec {Read("hwdec-current")}";
+    }
+
     private void OnPropertyChanged(object? sender, MpvPropertyChangedEventArgs e) =>
         Mutate(current => PlaybackSnapshotReducer.Apply(current, e.Name, e.Value));
 
@@ -208,6 +242,7 @@ public sealed class PlayerEngine : IDisposable
         // state by a resume-position restore.
         bool paused = _client.GetFlag("pause") ?? false;
         Mutate(current => PlaybackSnapshotReducer.MarkLoaded(current, paused));
+        FileLoaded?.Invoke(this, EventArgs.Empty);
     }
 
     private void OnEndFile(object? sender, MpvEndFileEventArgs e)

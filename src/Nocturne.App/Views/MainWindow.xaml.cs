@@ -55,6 +55,23 @@ public sealed partial class MainWindow : Window, IDisposable
         _engine.LogMessage += (_, message) =>
             DiagnosticLog.Current.Write($"mpv/{message.Level}", $"{message.Prefix}: {message.Text}");
 
+        // What was actually decoded, recorded once per file. Two files in the
+        // same container behaving differently is a colour question far more
+        // often than a codec one, and this is the line that answers it.
+        _engine.FileLoaded += (_, _) =>
+        {
+            try
+            {
+                DiagnosticLog.Current.Write("video", _engine.DescribeVideo());
+            }
+#pragma warning disable CA1031 // A log line must never take the engine's thread down.
+            catch (Exception ex)
+#pragma warning restore CA1031
+            {
+                DiagnosticLog.Current.WriteException("video", ex);
+            }
+        };
+
         DiagnosticLog.Current.Write(
             "engine",
             $"libmpv client API {MpvRuntime.ApiVersion.Major}.{MpvRuntime.ApiVersion.Minor}");

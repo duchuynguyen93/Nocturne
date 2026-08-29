@@ -67,6 +67,26 @@ this file is where that distinction is kept honest.
 
 ### Fixed
 
+- **HDR files rendered as a white rectangle.** Two files in the same container
+  behaved differently, which looked like a decoder problem and was a colour one.
+
+  `target-colorspace-hint=yes` shipped while the pipeline had no HDR output path.
+  That option is a promise, not a request: it tells libmpv that whoever presents
+  the frame will honour the signalled colour space, so libmpv stops tone-mapping
+  and hands over PQ-encoded values as they are. The swap chain is
+  `B8G8R8A8_UNorm` in the default sRGB colour space, and PQ values presented as
+  sRGB are enormously too bright — hence white, not merely wrong. SDR files were
+  unaffected, which is why it survived every earlier test.
+
+  The hint is off. libplacebo now tone-maps HDR to the SDR target itself, which
+  is one of the reasons `gpu-next` was chosen. `docs/RENDERING.md` records the
+  four things that must land together before it can be turned back on.
+
+- The log records what was actually decoded, once per file: codec, resolution,
+  pixel format, primaries, transfer function, matrix, signal peak and the active
+  hardware decoder. Colour first, because that is the field that distinguishes
+  two files a container makes look identical.
+
 - **The picture is the right way up.** The first frame this project ever rendered
   was upside down. `MPV_RENDER_PARAM_FLIP_Y` was set to 1 on the reasoning that
   GL's origin is bottom-left and Direct3D's is top-left — but the surface is a

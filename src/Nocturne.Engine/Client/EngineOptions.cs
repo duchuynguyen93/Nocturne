@@ -81,14 +81,33 @@ public sealed record EngineOptions
     public bool Interpolation { get; init; } = true;
 
     /// <summary>
-    /// Whether to tell the display driver about the source's colour volume.
+    /// Whether to tell the presenting layer about the source's colour volume.
     /// </summary>
     /// <remarks>
-    /// Required for HDR passthrough: without it the swap chain is told nothing
-    /// about the content and Windows tone-maps HDR into SDR before it reaches
-    /// the panel, which is exactly the loss the pipeline exists to avoid.
+    /// <para>
+    /// This is the HDR passthrough switch, and it is a promise, not a request.
+    /// Turning it on tells libmpv that whoever presents the frame will honour
+    /// the signalled colour space — so libmpv stops tone-mapping and hands over
+    /// PQ-encoded values as they are.
+    /// </para>
+    /// <para>
+    /// This app cannot honour that yet. The swap chain is <c>B8G8R8A8_UNorm</c>
+    /// in the default sRGB colour space, and nothing sets
+    /// <c>DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020</c> on it. PQ values
+    /// presented as sRGB are enormously too bright: an HDR file rendered this
+    /// way is not merely wrong, it is a white rectangle. That is what shipped —
+    /// SDR files played correctly and HDR files came out blank, which read as a
+    /// decoder bug and was a colour bug.
+    /// </para>
+    /// <para>
+    /// With it off, libplacebo tone-maps HDR down to the SDR target itself,
+    /// which is one of the reasons <c>gpu-next</c> was chosen. Turn this back on
+    /// in the same change that switches the swap chain to
+    /// <c>R10G10B10A2</c> and sets its colour space — not before, and see
+    /// docs/RENDERING.md §Risk 3.
+    /// </para>
     /// </remarks>
-    public bool TargetColorspaceHint { get; init; } = true;
+    public bool TargetColorspaceHint { get; init; }
 
     /// <summary>Whether to take exclusive control of the audio device.</summary>
     /// <remarks>
@@ -150,6 +169,9 @@ public sealed record EngineOptions
             ["interpolation"] = Interpolation ? "yes" : "no",
             ["tscale"] = "oversample",
 
+            // Off unless the presenting layer can actually honour the hint; see
+            // the property's own remarks. Signalling a colour space nobody acts
+            // on is how HDR files became white rectangles.
             ["target-colorspace-hint"] = TargetColorspaceHint ? "yes" : "no",
 
             // Subtitles: prefer the embedded ASS styling the author chose over

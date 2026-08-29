@@ -182,18 +182,32 @@ The general shape is worth keeping in mind for the rest of this file: a
 correction that is obviously necessary in the abstract may already have been
 applied by a layer in between.
 
-### Risk 3 — HDR is not wired up
+### Risk 3 — HDR is not wired up (partly realised 2026-08-30)
 
-The swap chain is created as `B8G8R8A8_UNorm` — 8 bits per channel, SDR. HDR
-passthrough needs `R10G10B10A2_UNorm`, `IDXGISwapChain4::SetColorSpace1` with
-`DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020`, and `SetHDRMetaData` carrying the
-source's mastering display data, driven by libmpv's `target-colorspace-hint`
-reporting. `MpvOpenGlFbo.InternalFormat` must change to `GL_RGB10_A2` at the
-same time, or libmpv dithers to 8 bits and discards the precision the rest of
-the change exists to preserve.
+The swap chain is `B8G8R8A8_UNorm` in the default sRGB colour space. Nothing sets
+`DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020`, and the EGL config is 8-bit. So the
+pipeline has no HDR output path.
 
-None of that is implemented. `EngineOptions.TargetColorspaceHint` is on, which
-means libmpv will report what it wants; nothing consumes the report yet.
+That was known. What was not accounted for is that `target-colorspace-hint=yes`
+shipped anyway, and **that option is a promise rather than a request**: it tells
+libmpv the presenting layer will honour the signalled colour space, so libmpv
+stops tone-mapping and hands over PQ-encoded values unchanged. Presented as sRGB,
+PQ values are enormously too bright — an HDR file did not look slightly wrong, it
+was a **white rectangle**, while SDR files in the same container played correctly.
+It read as a decoder bug and was a colour bug.
+
+The hint is now off, and libplacebo tone-maps HDR down to the SDR target itself,
+which is one of the reasons `gpu-next` was chosen in the first place.
+
+Turning it back on is not a one-line change and must happen in a single commit
+with all of:
+
+1. the swap chain format changed to `R10G10B10A2`,
+2. `IDXGISwapChain3::SetColorSpace1` called with the PQ colour space,
+3. the EGL config and the FBO's `InternalFormat` moved to `GL_RGB10_A2`,
+4. a fallback for displays that report no HDR support.
+
+Anything less re-creates the white rectangle.
 
 ### Risk 4 — no independent flip
 
