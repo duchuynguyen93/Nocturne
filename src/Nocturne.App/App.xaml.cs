@@ -332,7 +332,7 @@ public partial class App : Application
     /// <see cref="Microsoft.UI.Dispatching.DispatcherQueue"/> or it fails with
     /// the wrong-thread error WinUI gives any cross-thread UI access.
     /// </remarks>
-    private void OnActivationRedirected(AppInstance sender, AppActivationArguments activationArgs)
+    private void OnActivationRedirected(object? sender, AppActivationArguments activationArgs)
     {
         // Pattern-matched into a non-nullable local rather than checked with
         // `is null` and used afterwards: the lambda below runs later, on
