@@ -6,6 +6,9 @@ using Microsoft.UI.Xaml;
 using Microsoft.Windows.AppLifecycle;
 using Nocturne.App.Services;
 using Nocturne.App.Views;
+// Fully qualified at the one use site rather than aliased: this namespace also
+// declares a LaunchActivatedEventArgs, and importing it makes the OnLaunched
+// override ambiguous against the Microsoft.UI.Xaml type it is overriding.
 using Windows.ApplicationModel.Activation;
 
 namespace Nocturne.App;
@@ -62,7 +65,7 @@ public partial class App : Application
         "Nocturne");
 
     /// <inheritdoc />
-    protected override void OnLaunched(LaunchActivatedEventArgs args)
+    protected override void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
     {
         // Before anything else, including the log: a file association starts a
         // brand-new process on every double-click, and if one is already
