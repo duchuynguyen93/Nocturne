@@ -43,11 +43,18 @@ public sealed unsafe class ThumbnailSource : IDisposable
     private readonly Thread _worker;
     private readonly object _gate = new();
 
+    /// <summary>Set when the preview instance finishes seeking.</summary>
+    private readonly ManualResetEventSlim _seekCompleted = new(initialState: false);
+
     private MpvClient? _client;
     private nint _context;
     private nint _buffer;
 
     private TimeSpan? _wanted;
+
+    /// <summary>Whether the preview instance has a file loaded yet.</summary>
+    private volatile bool _ready;
+
     private bool _disposed;
 
     /// <summary>
@@ -125,23 +132,17 @@ public sealed unsafe class ThumbnailSource : IDisposable
 
     private void Run()
     {
+        // One block, so a failure part-way through Start is torn down too.
+        // Splitting them left the early-return path with no teardown at all: a
+        // render context that would not create leaked the libmpv instance behind
+        // it — with its own event thread — and the native buffer, once per file
+        // opened, for the life of the process.
         try
         {
             Start();
-        }
-#pragma warning disable CA1031 // Previews are optional; a failure must not escape this thread.
-        catch (Exception error)
-#pragma warning restore CA1031
-        {
-            Failed?.Invoke(this, error);
-            return;
-        }
-
-        try
-        {
             Loop();
         }
-#pragma warning disable CA1031 // Same again.
+#pragma warning disable CA1031 // Previews are optional; a failure must not escape this thread.
         catch (Exception error)
 #pragma warning restore CA1031
         {
@@ -156,6 +157,12 @@ public sealed unsafe class ThumbnailSource : IDisposable
     private void Start()
     {
         _client = new MpvClient(BuildOptions());
+
+        // loadfile below is asynchronous, and a seek issued before it finishes
+        // is answered with an error rather than ignored. Both of these gate the
+        // work in Capture on libmpv actually being ready for it.
+        _client.FileLoaded += (_, _) => _ready = true;
+        _client.PlaybackRestart += (_, _) => _seekCompleted.Set();
 
         _buffer = (nint)(void*)System.Runtime.InteropServices.NativeMemory.AlignedAlloc(
             (nuint)(_stride * _height), alignment: 64);
@@ -221,9 +228,37 @@ public sealed unsafe class ThumbnailSource : IDisposable
                 _wanted = null;
             }
 
-            if (target is { } position)
+            if (target is not { } position)
+            {
+                continue;
+            }
+
+            if (!_ready)
+            {
+                // Put it back rather than drop it. Someone who hovers once, early,
+                // and then holds still would otherwise get nothing at all — and
+                // hovering the seek bar immediately after opening a file is not an
+                // unusual thing to do, it is the first thing anyone does.
+                lock (_gate)
+                {
+                    _wanted ??= position;
+                }
+
+                continue;
+            }
+
+            try
             {
                 Capture(position, token);
+            }
+            catch (MpvException error)
+            {
+                // One refused seek must not end the feature. A file that cannot
+                // be seeked at all — a pipe, a stream, a damaged container —
+                // would otherwise kill this thread on its first request, and the
+                // window would go on showing an empty card from a dead decoder
+                // for the rest of the session.
+                Failed?.Invoke(this, error);
             }
         }
     }
@@ -235,10 +270,31 @@ public sealed unsafe class ThumbnailSource : IDisposable
         // frames for a picture that is about to be replaced by the next pointer
         // move. Landing on the nearest keyframe is what every player's scrub
         // preview does, and it is why they feel instant.
+        _seekCompleted.Reset();
+
         _client!.Command(
             "seek",
             position.TotalSeconds.ToString("R", CultureInfo.InvariantCulture),
             "absolute+keyframes");
+
+        // Waiting on the seek, not merely on "a frame is available".
+        //
+        // The render context's frame flag is set by the frame libmpv already had
+        // — the first frame of the file, after loading — and it stays set until
+        // something renders it. Treating that as the answer to this seek renders
+        // the wrong moment and labels it with the right position, which is the
+        // one failure this whole design is meant to avoid.
+        try
+        {
+            if (!_seekCompleted.Wait(TimeSpan.FromMilliseconds(500), token))
+            {
+                return;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
 
         if (!WaitForFrame(token))
         {
@@ -423,9 +479,18 @@ public sealed unsafe class ThumbnailSource : IDisposable
         // this waits rather than freeing anything itself. The bound is here for
         // the same reason it is on the playback renderer: a wedged decoder must
         // not stop the window from closing.
-        _ = _worker.Join(TimeSpan.FromSeconds(2));
+        if (!_worker.Join(TimeSpan.FromSeconds(2)))
+        {
+            // Still running, so these are still in use. Disposing them here made
+            // the worker's next wait throw instead of observing cancellation —
+            // it left by way of an unexpected exception and raised Failed on the
+            // way out, to a consumer that had already unsubscribed. They are
+            // left to be collected instead.
+            return;
+        }
 
         _requested.Dispose();
         _cancellation.Dispose();
+        _seekCompleted.Dispose();
     }
 }

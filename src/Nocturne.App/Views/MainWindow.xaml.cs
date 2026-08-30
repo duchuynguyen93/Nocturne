@@ -48,6 +48,9 @@ public sealed partial class MainWindow : Window, IDisposable
     private string? _previewPath;
     private bool _isPointerOnSeekBar;
 
+    /// <summary>The position the pointer last asked for.</summary>
+    private TimeSpan _previewWanted;
+
     /// <summary>Creates the window and starts the engine.</summary>
     public MainWindow()
     {
@@ -492,6 +495,17 @@ public sealed partial class MainWindow : Window, IDisposable
     // ── Scrub preview ────────────────────────────────────────────────────────
 
     /// <summary>
+    /// How far a delivered frame may sit from the pointer before it is dropped.
+    /// </summary>
+    /// <remarks>
+    /// Generous, because seeks land on keyframes and a keyframe interval of
+    /// several seconds is ordinary. This rejects frames from a position the
+    /// pointer has genuinely left, not the normal imprecision of a keyframe
+    /// seek — tightening it would reject almost every frame on a long-GOP file.
+    /// </remarks>
+    private static readonly TimeSpan StalePreview = TimeSpan.FromSeconds(15);
+
+    /// <summary>
     /// Starts a preview decoder for the file that just loaded.
     /// </summary>
     /// <remarks>
@@ -562,7 +576,25 @@ public sealed partial class MainWindow : Window, IDisposable
     {
         DispatcherQueue.TryEnqueue(() =>
         {
+            // Not the decoder in use any more. A frame already in flight when
+            // the file changed would otherwise be drawn into the new file's
+            // preview: same dimensions, so nothing complains, and the picture is
+            // simply from the wrong film.
+            if (!ReferenceEquals(sender, _thumbnails))
+            {
+                return;
+            }
+
             if (_previewBitmap is null || PreviewCard.Visibility != Visibility.Visible)
+            {
+                return;
+            }
+
+            // This is what the position on the frame is for, and it was being
+            // carried and ignored. Seeks land out of order under a fast drag,
+            // and a preview of somewhere the pointer left seconds ago is worse
+            // than the previous picture staying put.
+            if ((frame.Position - _previewWanted).Duration() > StalePreview)
             {
                 return;
             }
@@ -624,6 +656,7 @@ public sealed partial class MainWindow : Window, IDisposable
         double fraction = Math.Clamp(x / SeekBar.ActualWidth, 0.0, 1.0);
         TimeSpan position = SeekMath.ClampToRange(duration * fraction, duration);
 
+        _previewWanted = position;
         PreviewTimecode.Text = Timecode.Format(position);
         PreviewCard.Visibility = Visibility.Visible;
 

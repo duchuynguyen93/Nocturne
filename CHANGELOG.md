@@ -113,6 +113,30 @@ this file is where that distinction is kept honest.
 
 ### Fixed
 
+- **The scrub preview stopped working permanently after one refused seek**, and
+  the way to trigger it was the most ordinary gesture there is: hovering the seek
+  bar right after opening a file. `loadfile` is asynchronous, a seek issued
+  before it completes is answered with an error rather than ignored, and that
+  error escaped the worker thread — which then exited for good, leaving the
+  window holding a dead decoder and showing an empty card. A file that cannot be
+  seeked at all did the same on the first request. One refused seek is now
+  reported and skipped, and requests are held back until the preview instance has
+  a file loaded.
+
+- A failure part-way through starting the preview decoder leaked the libmpv
+  instance behind it — with its own event thread — and the native buffer, once
+  per file opened.
+
+- The preview waited for "a frame is available" rather than for the seek. The
+  render context's frame flag is set by the frame libmpv already had and stays
+  set until something renders it, so a preview could show the first frame of the
+  file labelled with the position under the pointer. It now waits for the seek to
+  complete.
+
+- Frames are dropped if they belong to a decoder that has since been replaced, or
+  to a position the pointer has genuinely left. `ThumbnailFrame` carried its
+  position for exactly this and nothing was reading it.
+
 - **A file opened by double-clicking it played with no picture.** This is the
   white rectangle, and it was never about colour or about HDR — two rounds were
   spent there.
