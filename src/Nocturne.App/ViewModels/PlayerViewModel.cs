@@ -212,6 +212,17 @@ public sealed class PlayerViewModel : ObservableBase, IDisposable
         }
     }
 
+    /// <summary>Whether a scrub gesture is in progress.</summary>
+    /// <remarks>
+    /// Read by the window so a drag that has wandered off the seek bar keeps its
+    /// preview: the pointer leaving the control does not end the gesture, and
+    /// the preview is the only thing showing where it is about to land.
+    /// </remarks>
+    public bool IsScrubbing => _isScrubbing;
+
+    /// <summary>Length of the current file, or zero when it is not known.</summary>
+    public TimeSpan Duration => _engine.Snapshot.Duration;
+
     /// <summary>Steps the playhead by a relative amount.</summary>
     public void SeekBy(TimeSpan step) => _engine.SeekBy(step);
 

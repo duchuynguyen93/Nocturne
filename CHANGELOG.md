@@ -13,6 +13,27 @@ this file is where that distinction is kept honest.
 
 ### Added
 
+- **Scrub preview.** Hovering or dragging the seek bar shows a thumbnail of the
+  frame at that point, with the timecode under it.
+
+  The frames come from a **second libmpv instance running the software
+  renderer**, and both halves of that are deliberate. A second instance because
+  the first one is playing, and seeking the playing instance to fetch a preview
+  is the one thing this feature must never do. The software renderer because the
+  GPU path is a single device, swap chain and render context that took a long
+  time to make work — threading a second consumer through it to produce
+  256-pixel-wide images would risk the part of the project that matters most for
+  the part that matters least. A keyframe decode into a small CPU buffer costs a
+  few milliseconds and shares nothing.
+
+  Requests are coalesced, not queued: a drag produces pointer events far faster
+  than frames can be decoded, and each one supersedes the last. Seeks are
+  keyframe-only, which is why every player's scrub preview feels instant.
+
+  The timecode updates from the pointer while the picture updates from the
+  decoder, so they disagree for as long as a decode takes. That is the right way
+  round — the label answers "where am I about to seek", which is known at once.
+
 - Double-clicking the picture enters and leaves full screen, alongside `F11` and
   the transport-bar button. The gesture is carried by a transparent sheet over
   the video only, so a double-click on the transport bar does nothing — rather

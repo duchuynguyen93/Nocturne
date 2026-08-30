@@ -1,17 +1,22 @@
 using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.WindowsRuntime;
 using Microsoft.UI.Input;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media.Imaging;
 using Nocturne.App.Services;
 using Nocturne.App.ViewModels;
 using Nocturne.Core.Media;
 using Nocturne.Core.Playback;
+using Nocturne.Core.Text;
 using Nocturne.Engine.Client;
 using Nocturne.Engine.Interop;
+using Nocturne.Engine.Thumbnails;
 using Nocturne.Render.Pipeline;
 using Windows.ApplicationModel.DataTransfer;
+using Windows.Foundation;
 using Windows.Storage;
 using Windows.Storage.Pickers;
 using Windows.System;
@@ -37,6 +42,11 @@ public sealed partial class MainWindow : Window, IDisposable
 
     /// <summary>A launch file waiting for the render pipeline to exist.</summary>
     private string? _deferredLaunchPath;
+
+    private ThumbnailSource? _thumbnails;
+    private WriteableBitmap? _previewBitmap;
+    private string? _previewPath;
+    private bool _isPointerOnSeekBar;
 
     /// <summary>Creates the window and starts the engine.</summary>
     public MainWindow()
@@ -65,6 +75,15 @@ public sealed partial class MainWindow : Window, IDisposable
         // that answers it — but only from here. Hooked to FileLoaded, which is
         // the obvious place, it ran before the video output existed and every
         // field came back as a question mark.
+        // The preview decoder is per file, and the path is only known once one
+        // is loaded. Raised on the engine's thread, so it hops before touching
+        // anything the window owns.
+        _engine.FileLoaded += (_, _) =>
+        {
+            string? path = _engine?.Snapshot.Source;
+            DispatcherQueue.TryEnqueue(() => StartThumbnails(path));
+        };
+
         _engine.VideoConfigured += (_, _) =>
         {
             try
@@ -123,6 +142,16 @@ public sealed partial class MainWindow : Window, IDisposable
             new PointerEventHandler(OnSeekBarPointerCancelled), handledEventsToo: true);
 
         SeekBar.KeyDown += OnSeekBarKeyDown;
+
+        // Hover and drag both drive the preview, and a Slider marks pointer
+        // events handled, so these need the same handledEventsToo treatment as
+        // the scrub handlers above.
+        SeekBar.AddHandler(UIElement.PointerMovedEvent,
+            new PointerEventHandler(OnSeekBarPointerMoved), handledEventsToo: true);
+        SeekBar.AddHandler(UIElement.PointerEnteredEvent,
+            new PointerEventHandler(OnSeekBarPointerEntered), handledEventsToo: true);
+        SeekBar.AddHandler(UIElement.PointerExitedEvent,
+            new PointerEventHandler(OnSeekBarPointerExited), handledEventsToo: true);
 
         VolumeSlider.AddHandler(UIElement.PointerPressedEvent,
             new PointerEventHandler(OnVolumePointerPressed), handledEventsToo: true);
@@ -447,11 +476,184 @@ public sealed partial class MainWindow : Window, IDisposable
 
     private void OnSeekBarPointerPressed(object sender, PointerRoutedEventArgs e) => ViewModel.BeginScrub();
 
-    private void OnSeekBarPointerReleased(object sender, PointerRoutedEventArgs e) =>
+    private void OnSeekBarPointerReleased(object sender, PointerRoutedEventArgs e)
+    {
         ViewModel.EndScrub(SeekBar.Value);
+
+        if (!_isPointerOnSeekBar)
+        {
+            HidePreview();
+        }
+    }
 
     private void OnSeekBarPointerCancelled(object sender, PointerRoutedEventArgs e) =>
         ViewModel.CancelScrub();
+
+    // ── Scrub preview ────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Starts a preview decoder for the file that just loaded.
+    /// </summary>
+    /// <remarks>
+    /// Keyed on the path so that a repeat of the same file — a replay, or the
+    /// playlist looping back — does not tear down a working decoder and build an
+    /// identical one.
+    /// </remarks>
+    private void StartThumbnails(string? path)
+    {
+        if (string.Equals(path, _previewPath, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        StopThumbnails();
+        _previewPath = path;
+
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        try
+        {
+            var source = new ThumbnailSource(path);
+            source.FrameReady += OnThumbnailReady;
+            source.Failed += OnThumbnailFailed;
+
+            (int width, int height) = source.Size;
+            _previewBitmap = new WriteableBitmap(width, height);
+            PreviewImage.Source = _previewBitmap;
+
+            _thumbnails = source;
+        }
+#pragma warning disable CA1031 // A preview that cannot start must not affect playback.
+        catch (Exception error)
+#pragma warning restore CA1031
+        {
+            DiagnosticLog.Current.WriteException("preview", error);
+        }
+    }
+
+    private void StopThumbnails()
+    {
+        if (_thumbnails is null)
+        {
+            return;
+        }
+
+        _thumbnails.FrameReady -= OnThumbnailReady;
+        _thumbnails.Failed -= OnThumbnailFailed;
+        _thumbnails.Dispose();
+        _thumbnails = null;
+
+        HidePreview();
+    }
+
+    private void OnThumbnailFailed(object? sender, Exception error) =>
+        DiagnosticLog.Current.WriteException("preview", error);
+
+    /// <summary>Copies a decoded frame into the on-screen bitmap.</summary>
+    /// <remarks>
+    /// Raised on the decoder's worker thread, so everything here happens after a
+    /// hop. The frame is dropped rather than queued if the pointer has since
+    /// left the bar: it is a picture of somewhere nobody is looking any more.
+    /// </remarks>
+    private void OnThumbnailReady(object? sender, ThumbnailFrame frame)
+    {
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (_previewBitmap is null || PreviewCard.Visibility != Visibility.Visible)
+            {
+                return;
+            }
+
+            try
+            {
+                using Stream pixels = _previewBitmap.PixelBuffer.AsStream();
+                pixels.Write(frame.Pixels, 0, frame.Pixels.Length);
+                _previewBitmap.Invalidate();
+            }
+#pragma warning disable CA1031 // Same again: a preview is never worth a crash.
+            catch (Exception error)
+#pragma warning restore CA1031
+            {
+                DiagnosticLog.Current.WriteException("preview", error);
+            }
+        });
+    }
+
+    private void OnSeekBarPointerEntered(object sender, PointerRoutedEventArgs e)
+    {
+        _isPointerOnSeekBar = true;
+        UpdatePreview(e);
+    }
+
+    private void OnSeekBarPointerMoved(object sender, PointerRoutedEventArgs e) => UpdatePreview(e);
+
+    private void OnSeekBarPointerExited(object sender, PointerRoutedEventArgs e)
+    {
+        _isPointerOnSeekBar = false;
+
+        // A drag that has left the bar vertically is still a drag, and the
+        // preview is the only thing showing where it will land.
+        if (!ViewModel.IsScrubbing)
+        {
+            HidePreview();
+        }
+    }
+
+    /// <summary>
+    /// Moves the preview card under the pointer and asks for the frame there.
+    /// </summary>
+    /// <remarks>
+    /// The timecode is written from the pointer, not from the frame that comes
+    /// back. They disagree for as long as a decode takes, and that is the right
+    /// way round: the label answers "where am I about to seek", which is known
+    /// immediately, while the picture answers "what is there", which is not.
+    /// </remarks>
+    private void UpdatePreview(PointerRoutedEventArgs e)
+    {
+        TimeSpan duration = ViewModel.Duration;
+        if (_thumbnails is null || duration <= TimeSpan.Zero || SeekBar.ActualWidth <= 0)
+        {
+            HidePreview();
+            return;
+        }
+
+        double x = e.GetCurrentPoint(SeekBar).Position.X;
+        double fraction = Math.Clamp(x / SeekBar.ActualWidth, 0.0, 1.0);
+        TimeSpan position = SeekMath.ClampToRange(duration * fraction, duration);
+
+        PreviewTimecode.Text = Timecode.Format(position);
+        PreviewCard.Visibility = Visibility.Visible;
+
+        PlacePreview(x);
+        _thumbnails.Request(position);
+    }
+
+    /// <summary>Centres the card on the pointer, without letting it leave the window.</summary>
+    private void PlacePreview(double pointerX)
+    {
+        Point origin = SeekBar
+            .TransformToVisual(Stage)
+            .TransformPoint(new Point(pointerX, 0));
+
+        // ActualWidth is zero until the card has been measured once, which is
+        // exactly the first time it is shown. The padded image width is the
+        // right answer for that one frame.
+        double width = PreviewCard.ActualWidth > 0 ? PreviewCard.ActualWidth : 200;
+
+        const double Edge = 8;
+        double maximum = Math.Max(Edge, Stage.ActualWidth - width - Edge);
+
+        PreviewOffset.X = Math.Clamp(origin.X - (width / 2), Edge, maximum);
+    }
+
+    private void HidePreview()
+    {
+        _isPointerOnSeekBar = false;
+        PreviewCard.Visibility = Visibility.Collapsed;
+    }
 
     /// <summary>
     /// Seeks with the arrow keys without letting the slider move itself.
@@ -668,6 +870,7 @@ public sealed partial class MainWindow : Window, IDisposable
             _renderer = null;
         }
 
+        StopThumbnails();
         ViewModel.Dispose();
 
         if (renderStateLeaked)

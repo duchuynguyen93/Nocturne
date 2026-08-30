@@ -136,6 +136,28 @@ public enum MpvRenderParamType
 
     /// <summary>Consumes a frame without drawing it.</summary>
     SkipRendering = 13,
+
+    /// <summary>Software target size, as <c>int[2]</c>. Software renderer only.</summary>
+    SoftwareSize = 17,
+
+    /// <summary>Software pixel layout, as a NUL-terminated string.</summary>
+    /// <remarks>
+    /// One of <c>rgb0</c>, <c>bgr0</c>, <c>0bgr</c>, <c>0rgb</c> at four bytes
+    /// per pixel, or <c>rgb24</c> at three — which render.h calls strongly
+    /// discouraged, and which no consumer here wants anyway.
+    /// </remarks>
+    SoftwareFormat = 18,
+
+    /// <summary>Bytes between one row and the next, as <c>size_t*</c>.</summary>
+    SoftwareStride = 19,
+
+    /// <summary>Target buffer, pointing at the pixel at (0, 0).</summary>
+    /// <remarks>
+    /// render.h asks for the pointer and the stride to be multiples of 64 so
+    /// its conversion can use SIMD; anything less is a correctness-preserving
+    /// slow path rather than a failure.
+    /// </remarks>
+    SoftwarePointer = 20,
 }
 
 /// <summary>Error codes returned by libmpv entry points.</summary>

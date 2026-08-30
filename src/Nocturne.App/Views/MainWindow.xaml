@@ -37,7 +37,7 @@
         </Grid>
 
         <!-- Video surface and everything laid over it. -->
-        <Grid Grid.Row="1" AllowDrop="True" DragOver="OnDragOver" Drop="OnDrop">
+        <Grid x:Name="Stage" Grid.Row="1" AllowDrop="True" DragOver="OnDragOver" Drop="OnDrop">
 
             <!--
               The composition surface libmpv draws into. Everything below this
@@ -230,6 +230,47 @@
                     </StackPanel>
                 </Grid>
             </Grid>
+
+            <!--
+              Scrub preview. Last child of the stage so it draws over the
+              transport bar, and positioned by a transform rather than a margin
+              because it follows the pointer along the seek bar.
+
+              IsHitTestVisible is false throughout: this card sits directly above
+              the control that summons it, and a card that could take the pointer
+              would end a drag the moment it appeared under one.
+            -->
+            <Border
+                x:Name="PreviewCard"
+                Visibility="Collapsed"
+                IsHitTestVisible="False"
+                HorizontalAlignment="Left"
+                VerticalAlignment="Bottom"
+                Margin="0,0,0,96"
+                Padding="4"
+                Background="{StaticResource SurfaceRaisedBrush}"
+                BorderBrush="{StaticResource BorderStrongBrush}"
+                BorderThickness="1"
+                CornerRadius="10">
+                <Border.RenderTransform>
+                    <TranslateTransform x:Name="PreviewOffset" />
+                </Border.RenderTransform>
+
+                <StackPanel Spacing="4">
+                    <Border CornerRadius="6" Background="#FF000000">
+                        <Image
+                            x:Name="PreviewImage"
+                            Width="192"
+                            Height="108"
+                            Stretch="Uniform" />
+                    </Border>
+                    <TextBlock
+                        x:Name="PreviewTimecode"
+                        Style="{StaticResource TimecodeTextStyle}"
+                        Foreground="{StaticResource TextPrimaryBrush}"
+                        HorizontalAlignment="Center" />
+                </StackPanel>
+            </Border>
         </Grid>
     </Grid>
 </Window>
