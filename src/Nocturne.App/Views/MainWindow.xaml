@@ -117,11 +117,20 @@
               overlay chip in the source design: mono, translucent, bordered.
             -->
             <Border
+                x:Name="OverlayChip"
                 Style="{StaticResource OverlayChipStyle}"
                 Visibility="{x:Bind ViewModel.TransportVisibility, Mode=OneWay}"
                 HorizontalAlignment="Left"
                 VerticalAlignment="Bottom"
                 Margin="24,0,0,116">
+                <!--
+                  Opacity is animated rather than toggled, and it is animated
+                  rather than Visibility being toggled, because Visibility cannot
+                  be faded and because the binding above already owns it.
+                -->
+                <Border.OpacityTransition>
+                    <ScalarTransition Duration="0:0:0.25" />
+                </Border.OpacityTransition>
                 <TextBlock
                     Style="{StaticResource TimecodeTextStyle}"
                     Foreground="{StaticResource TextPrimaryBrush}"
@@ -141,6 +150,9 @@
                 VerticalAlignment="Bottom"
                 Background="{StaticResource TransportScrimBrush}"
                 Padding="24,32,24,16">
+                <Grid.OpacityTransition>
+                    <ScalarTransition Duration="0:0:0.25" />
+                </Grid.OpacityTransition>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />

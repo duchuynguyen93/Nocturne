@@ -13,6 +13,22 @@ this file is where that distinction is kept honest.
 
 ### Added
 
+- **The transport bar fades away in full screen.** Two and a half seconds after
+  the pointer stops, the controls, the file-name chip and the mouse cursor all
+  go, leaving the picture on its own. Any movement, click or keyboard shortcut
+  brings them back.
+
+  Only in full screen. A window with a title bar and a visible cursor is not a
+  place to hide the controls, and a player whose transport vanished on a desktop
+  would read as a fault rather than a feature.
+
+  It does not hide while a drag is in progress, while the volume is being
+  adjusted, or while the pointer is resting on the transport itself — someone
+  reading the timecode has stopped moving, and that is the one moment they were
+  definitely looking at it. `IsHitTestVisible` follows the opacity, because a
+  fully transparent control still takes clicks: without it the bottom of the
+  screen would show the picture and refuse to let the pointer reach it.
+
 - **Scrub preview.** Hovering or dragging the seek bar shows a thumbnail of the
   frame at that point, with the timecode under it.
 

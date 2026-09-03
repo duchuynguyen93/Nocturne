@@ -51,6 +51,22 @@ public sealed partial class MainWindow : Window, IDisposable
     /// <summary>The position the pointer last asked for.</summary>
     private TimeSpan _previewWanted;
 
+    /// <summary>
+    /// How long the pointer must be still before the chrome fades in full screen.
+    /// </summary>
+    /// <remarks>
+    /// Long enough to reach a button after deciding to, short enough that it
+    /// does not sit over the picture. Every player lands within a second of
+    /// this, and the reason is that the number is bounded on both sides by
+    /// something real.
+    /// </remarks>
+    private static readonly TimeSpan ChromeIdleDelay = TimeSpan.FromSeconds(2.5);
+
+    private DispatcherTimer? _chromeIdle;
+    private bool _chromeHidden;
+    private bool _cursorHidden;
+    private bool _isPointerOnTransport;
+
     /// <summary>Creates the window and starts the engine.</summary>
     public MainWindow()
     {
@@ -108,6 +124,28 @@ public sealed partial class MainWindow : Window, IDisposable
         ViewModel = new PlayerViewModel(_engine, DispatcherQueue);
 
         VideoPanel.CompositionScaleChanged += OnVideoPanelScaleChanged;
+
+        _chromeIdle = new DispatcherTimer { Interval = ChromeIdleDelay };
+        _chromeIdle.Tick += OnChromeIdle;
+
+        // On the root rather than on the transport bar: the point is to notice
+        // the pointer moving anywhere over the picture, which is where it is
+        // when the chrome is hidden. handledEventsToo because the controls
+        // underneath handle their own pointer events, and a pointer resting on
+        // a button is still a pointer that moved.
+        RootGrid.AddHandler(UIElement.PointerMovedEvent,
+            new PointerEventHandler(OnPointerActivity), handledEventsToo: true);
+        RootGrid.AddHandler(UIElement.PointerPressedEvent,
+            new PointerEventHandler(OnPointerActivity), handledEventsToo: true);
+
+        // A pointer resting on the transport is not idleness. Someone reading
+        // the timecode or deciding which button to press stops moving, and
+        // taking the controls away underneath them is the one moment they were
+        // definitely looking at them.
+        TransportBar.AddHandler(UIElement.PointerEnteredEvent,
+            new PointerEventHandler((_, _) => _isPointerOnTransport = true), handledEventsToo: true);
+        TransportBar.AddHandler(UIElement.PointerExitedEvent,
+            new PointerEventHandler((_, _) => _isPointerOnTransport = false), handledEventsToo: true);
 
         AttachSliderGestures();
         AttachAccelerators();
@@ -181,6 +219,9 @@ public sealed partial class MainWindow : Window, IDisposable
             var accelerator = new KeyboardAccelerator { Key = key, Modifiers = modifiers };
             accelerator.Invoked += (_, args) =>
             {
+                // A shortcut is a reason to show what it changed: pressing space
+                // in full screen should let you see the transport agree with you.
+                WakeChrome();
                 action();
                 args.Handled = true;
             };
@@ -797,6 +838,116 @@ public sealed partial class MainWindow : Window, IDisposable
         }
     }
 
+    // ── Auto-hiding chrome ───────────────────────────────────────────────────
+
+    private void OnPointerActivity(object sender, PointerRoutedEventArgs e) => WakeChrome();
+
+    /// <summary>
+    /// Shows the chrome and restarts the countdown that hides it again.
+    /// </summary>
+    /// <remarks>
+    /// Called from anything that counts as the user being present. Outside full
+    /// screen it only ever shows: a window with a title bar and a cursor is not
+    /// a place to hide the controls, and a player that made its transport
+    /// disappear on a desktop would read as a bug.
+    /// </remarks>
+    private void WakeChrome()
+    {
+        SetChromeHidden(false);
+
+        if (_chromeIdle is null)
+        {
+            return;
+        }
+
+        _chromeIdle.Stop();
+
+        if (_isFullScreen)
+        {
+            _chromeIdle.Start();
+        }
+    }
+
+    private void OnChromeIdle(object? sender, object e)
+    {
+        _chromeIdle?.Stop();
+
+        if (!_isFullScreen)
+        {
+            return;
+        }
+
+        // Not while the user is in the middle of something. A transport bar that
+        // vanished out from under a drag would take the pointer capture with it,
+        // and the gesture would end wherever the thumb happened to be.
+        if (ViewModel.IsScrubbing || ViewModel.IsAdjustingVolume || _isPointerOnTransport)
+        {
+            _chromeIdle?.Start();
+            return;
+        }
+
+        SetChromeHidden(true);
+    }
+
+    /// <summary>Fades the transport and the file-name chip, and the cursor with them.</summary>
+    /// <remarks>
+    /// <c>IsHitTestVisible</c> goes with the opacity. A fully transparent
+    /// control still takes clicks, so without it the bottom of the screen would
+    /// stay unclickable-through while showing nothing — the picture would be
+    /// there and the pointer would not reach it.
+    /// </remarks>
+    private void SetChromeHidden(bool hidden)
+    {
+        if (_chromeHidden == hidden)
+        {
+            return;
+        }
+
+        _chromeHidden = hidden;
+
+        double opacity = hidden ? 0 : 1;
+        TransportBar.Opacity = opacity;
+        OverlayChip.Opacity = opacity;
+        TransportBar.IsHitTestVisible = !hidden;
+        OverlayChip.IsHitTestVisible = !hidden;
+
+        if (hidden)
+        {
+            // The preview belongs to the seek bar, and the seek bar has just
+            // gone. Leaving it up would put a thumbnail on an empty screen.
+            HidePreview();
+            _isPointerOnTransport = false;
+        }
+
+        SetCursorHidden(hidden);
+    }
+
+    /// <summary>
+    /// Hides or restores the mouse pointer.
+    /// </summary>
+    /// <remarks>
+    /// <c>ShowCursor</c> keeps a counter rather than a flag, so the calls have
+    /// to balance exactly — the state is tracked here rather than trusted to the
+    /// call sites, because one unmatched hide leaves the machine with no cursor
+    /// until something else happens to show it. It only affects the pointer
+    /// while it is over a window of this thread, which is precisely the scope
+    /// wanted.
+    /// </remarks>
+    private void SetCursorHidden(bool hidden)
+    {
+        if (_cursorHidden == hidden)
+        {
+            return;
+        }
+
+        _cursorHidden = hidden;
+        _ = ShowCursor(!hidden);
+    }
+
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [DllImport("user32.dll")]
+    private static extern int ShowCursor([MarshalAs(UnmanagedType.Bool)] bool bShow);
+
     private void ToggleFullScreen()
     {
         _isFullScreen = !_isFullScreen;
@@ -814,10 +965,15 @@ public sealed partial class MainWindow : Window, IDisposable
             // back restored, having quietly lost the state the user chose.
             _stateBeforeFullScreen = (AppWindow.Presenter as OverlappedPresenter)?.State;
             AppWindow.SetPresenter(AppWindowPresenterKind.FullScreen);
+            WakeChrome();
             return;
         }
 
         AppWindow.SetPresenter(AppWindowPresenterKind.Overlapped);
+
+        // Leaving full screen always restores the chrome, whatever the timer was
+        // about to do.
+        WakeChrome();
 
         if (_stateBeforeFullScreen is { } state
             && AppWindow.Presenter is OverlappedPresenter presenter)
@@ -902,6 +1058,17 @@ public sealed partial class MainWindow : Window, IDisposable
             _renderer.RenderFailed -= OnRenderFailed;
             _renderer = null;
         }
+
+        if (_chromeIdle is not null)
+        {
+            _chromeIdle.Stop();
+            _chromeIdle.Tick -= OnChromeIdle;
+            _chromeIdle = null;
+        }
+
+        // Balanced before the window goes away. A process that exits owing a
+        // ShowCursor leaves the pointer missing over whatever is underneath.
+        SetCursorHidden(false);
 
         StopThumbnails();
         ViewModel.Dispose();
