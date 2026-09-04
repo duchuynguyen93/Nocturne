@@ -52,7 +52,22 @@ internal static unsafe class Egl
     internal const int EGL_PBUFFER_BIT = 0x0001;
     internal const int EGL_OPENGL_ES2_BIT = 0x0004;
     internal const int EGL_OPENGL_ES3_BIT = 0x0040;
+    /// <summary>
+    /// Requested client major version. EGL 1.5 names this
+    /// <c>EGL_CONTEXT_MAJOR_VERSION</c>; the token is the same either way.
+    /// </summary>
     internal const int EGL_CONTEXT_CLIENT_VERSION = 0x3098;
+
+    /// <summary>
+    /// Requested client minor version.
+    /// </summary>
+    /// <remarks>
+    /// EGL 1.5 core, and <c>EGL_KHR_create_context</c> before it. Without it the
+    /// major version alone is all that is asked for, and ANGLE answers with the
+    /// lowest it can — 3.0, which has neither compute shaders nor shader storage
+    /// buffers, and therefore no HDR peak detection inside libmpv.
+    /// </remarks>
+    internal const int EGL_CONTEXT_MINOR_VERSION = 0x30FB;
 
     internal const int EGL_WIDTH = 0x3057;
     internal const int EGL_HEIGHT = 0x3056;

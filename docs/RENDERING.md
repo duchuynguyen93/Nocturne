@@ -252,19 +252,28 @@ colour-space parameter. It is `target-trc=pq`, `target-prim=bt.2020` and
 3. the EGL config and the FBO's `InternalFormat` moved to `GL_RGB10_A2`,
 4. a fallback for displays that report no HDR support.
 
-**A smaller improvement available first**, and now confirmed by a real run:
+**A smaller improvement, taken (2026-09-04).** A real run reported:
 
 ```
+libmpv_render: GL_VERSION='OpenGL ES 3.0.0 (ANGLE ...)'
 libmpv_render: Disabling HDR peak computation
                (compute shaders=0, SSBO=0).
 ```
 
-`hdr-compute-peak` needs OpenGL ES 3.1. `AngleContext` asks for
-`EGL_CONTEXT_CLIENT_VERSION 3` with no minor version, so ANGLE returns ES 3.0 —
-the log confirms `GL_VERSION='OpenGL ES 3.0.0'`. Tone mapping therefore works
-from static metadata, and a PQ file without metadata is treated as a 10,000-nit
-source and comes out much darker than it should. Requesting ES 3.1 with a
-fallback to 3.0 would fix that without touching the swap chain.
+`hdr-compute-peak` needs compute shaders and shader storage buffers, which
+arrive in OpenGL ES **3.1**. `AngleContext` was asking for
+`EGL_CONTEXT_CLIENT_VERSION 3` and nothing else, and a request for major version
+3 alone is satisfied by 3.0 — so that is what ANGLE returned. Tone mapping then
+ran from static metadata, and a PQ file carrying none is treated as a 10,000-nit
+source and comes out far darker than it should.
+
+It now asks for 3.1 through `EGL_CONTEXT_MINOR_VERSION` and accepts 3.0 if that
+is refused. The fallback is not decoration: 3.1 needs Direct3D feature level 11_0
+or better, and a machine below that must still play video — it just plays HDR
+less well, which is where this started. The trace says which one was granted.
+
+This does not make the app output HDR. It makes the tone mapping to SDR measure
+the source instead of guessing at it.
 
 ### Risk 4 — no independent flip
 

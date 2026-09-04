@@ -129,6 +129,19 @@ this file is where that distinction is kept honest.
 
 ### Fixed
 
+- **HDR peak detection was silently disabled**, so HDR files were tone-mapped
+  from static metadata and a PQ file carrying none came out far darker than it
+  should. `hdr-compute-peak` needs compute shaders and shader storage buffers,
+  which arrive in OpenGL ES 3.1 — and `AngleContext` asked for
+  `EGL_CONTEXT_CLIENT_VERSION 3` and nothing else, a request that 3.0 satisfies.
+  A run on a real machine confirmed it: `GL_VERSION='OpenGL ES 3.0.0'`, followed
+  by `Disabling HDR peak computation (compute shaders=0, SSBO=0)`.
+
+  It now asks for 3.1 through `EGL_CONTEXT_MINOR_VERSION` and falls back to 3.0
+  if that is refused, logging which it got. The fallback matters: 3.1 needs
+  Direct3D feature level 11_0 or better, and a machine below that must still play
+  video.
+
 - **The scrub preview stopped working permanently after one refused seek**, and
   the way to trigger it was the most ordinary gesture there is: hovering the seek
   bar right after opening a file. `loadfile` is asynchronous, a seek issued

@@ -385,13 +385,29 @@ internal sealed unsafe class AngleContext : IDisposable
 
         step($"eglChooseConfig -> {configCount} config(s)");
 
-        int* contextAttributes = stackalloc int[]
+        // ES 3.1 asked for first, 3.0 accepted.
+        //
+        // Asking for major version 3 alone gets 3.0, because that is the lowest
+        // version satisfying the request — and libmpv's HDR peak detection needs
+        // compute shaders and shader storage buffers, which arrive in 3.1. On a
+        // 3.0 context it disables itself and says so in the log, and tone mapping
+        // then runs from static metadata: a PQ file carrying none is treated as a
+        // 10,000-nit source and comes out far darker than it should.
+        //
+        // The fallback is not decoration. 3.1 needs feature level 11_0 or better
+        // from the Direct3D backend, and a machine below that must still play
+        // video — it just plays HDR less well, which is where this started.
+        nint context = CreateContext(display, config, minorVersion: 1);
+        if (context != Egl.EGL_NO_CONTEXT)
         {
-            Egl.EGL_CONTEXT_CLIENT_VERSION, 3,
-            Egl.EGL_NONE,
-        };
+            step("eglCreateContext -> OpenGL ES 3.1");
+        }
+        else
+        {
+            step($"OpenGL ES 3.1 unavailable ({Egl.DescribeLastError()}), falling back to 3.0");
+            context = CreateContext(display, config, minorVersion: 0);
+        }
 
-        nint context = Egl.CreateContext(display, config, Egl.EGL_NO_CONTEXT, contextAttributes);
         if (context == Egl.EGL_NO_CONTEXT)
         {
             throw new RenderInitializationException(
@@ -409,6 +425,24 @@ internal sealed unsafe class AngleContext : IDisposable
 
         step("ANGLE context created");
         return new AngleContext(display, config, context, eglDevice, ownsEglDevice, device);
+    }
+
+    /// <summary>Creates an ES 3.x context, or returns <c>EGL_NO_CONTEXT</c>.</summary>
+    /// <remarks>
+    /// Failure is a return value here rather than an exception, because the
+    /// caller's first attempt is expected to fail on some machines and that is
+    /// not an error — it is the question being asked.
+    /// </remarks>
+    private static nint CreateContext(nint display, nint config, int minorVersion)
+    {
+        int* attributes = stackalloc int[]
+        {
+            Egl.EGL_CONTEXT_CLIENT_VERSION, 3,
+            Egl.EGL_CONTEXT_MINOR_VERSION, minorVersion,
+            Egl.EGL_NONE,
+        };
+
+        return Egl.CreateContext(display, config, Egl.EGL_NO_CONTEXT, attributes);
     }
 
     /// <summary>Creates a hardware Direct3D 11 device for the app to own.</summary>
