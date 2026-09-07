@@ -129,6 +129,14 @@ this file is where that distinction is kept honest.
 
 ### Fixed
 
+- **The window had no icon**, so Alt+Tab and the taskbar showed the generic
+  placeholder while the file in Explorer looked correct. `ApplicationIcon` puts
+  the icon into the executable's resources, which is what the shell reads; a
+  window has its own icon and nothing gives it one by default. It is now taken
+  from this executable's own resources — one source, so the window cannot
+  disagree with the file — at the two sizes Windows asks for separately, because
+  letting it scale the large one down gives a smeared title-bar icon.
+
 - **HDR peak detection was silently disabled**, so HDR files were tone-mapped
   from static metadata and a PQ file carrying none came out far darker than it
   should. `hdr-compute-peak` needs compute shaders and shader storage buffers,

@@ -78,6 +78,8 @@ public sealed partial class MainWindow : Window, IDisposable
 
         ApplyInitialSize();
 
+        ApplyWindowIcon();
+
         ApplyTitleBarColors();
 
         _engine = new PlayerEngine(EngineOptions.Default);
@@ -316,6 +318,107 @@ public sealed partial class MainWindow : Window, IDisposable
         // remembered size they have not yet chosen.
         AppWindow.Resize(new Windows.Graphics.SizeInt32(1280, 760));
     }
+
+    /// <summary>
+    /// Gives the window the icon the executable already carries.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The <c>ApplicationIcon</c> in the project file puts the icon into the
+    /// executable's resources, which is what Explorer and the Start menu read.
+    /// A <em>window</em> has its own icon, and nothing gives it one by default —
+    /// so Alt+Tab and the taskbar showed the generic placeholder while the file
+    /// on disk looked correct, which is why this reads as "the icon is wrong"
+    /// rather than "the icon is missing".
+    /// </para>
+    /// <para>
+    /// Taken from this executable's own resources rather than from a copy of the
+    /// <c>.ico</c> beside it: one source, so the window can never disagree with
+    /// the file. Two sizes, because Windows asks for them separately and letting
+    /// it scale the large one down gives a smeared 16-pixel title-bar icon.
+    /// </para>
+    /// <para>
+    /// The handles are deliberately not destroyed. The window holds them for as
+    /// long as it exists, and it exists for as long as the process does.
+    /// </para>
+    /// </remarks>
+    private void ApplyWindowIcon()
+    {
+        try
+        {
+            nint window = WindowNative.GetWindowHandle(this);
+            if (window == nint.Zero)
+            {
+                return;
+            }
+
+            SetIcon(window, IconBig, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON));
+            SetIcon(window, IconSmall, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON));
+        }
+#pragma warning disable CA1031 // A window without its icon still plays video.
+        catch (Exception error)
+#pragma warning restore CA1031
+        {
+            DiagnosticLog.Current.WriteException("icon", error);
+        }
+    }
+
+    private static void SetIcon(nint window, nint which, int width, int height)
+    {
+        // 32512 is the resource id the .NET build gives the ApplicationIcon
+        // group, and asking for an explicit size lets Windows pick the closest
+        // image inside that group rather than resampling one.
+        nint icon = LoadImage(
+            GetModuleHandle(null), IconResourceId, ImageIcon, width, height, flags: 0);
+
+        if (icon == nint.Zero)
+        {
+            // Nothing depends on that resource id being what it is, so there is
+            // a way through that does not assume it: pull the first icon out of
+            // the file on disk instead.
+            _ = ExtractIconEx(Environment.ProcessPath ?? string.Empty, 0, out nint large, out nint small, 1);
+            icon = which == IconBig ? large : small;
+
+            if (icon == nint.Zero)
+            {
+                return;
+            }
+        }
+
+        _ = SendMessage(window, WmSetIcon, which, icon);
+    }
+
+    private const int WmSetIcon = 0x0080;
+    private const nint IconSmall = 0;
+    private const nint IconBig = 1;
+    private const int ImageIcon = 1;
+    private const int SM_CXICON = 11;
+    private const int SM_CYICON = 12;
+    private const int SM_CXSMICON = 49;
+    private const int SM_CYSMICON = 50;
+
+    /// <summary>The icon group id emitted for <c>ApplicationIcon</c>.</summary>
+    private static readonly nint IconResourceId = 32512;
+
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [DllImport("user32.dll", EntryPoint = "LoadImageW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern nint LoadImage(nint instance, nint name, int type, int cx, int cy, uint flags);
+
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [DllImport("user32.dll", EntryPoint = "SendMessageW", CharSet = CharSet.Unicode)]
+    private static extern nint SendMessage(nint window, int message, nint wParam, nint lParam);
+
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [DllImport("user32.dll")]
+    private static extern int GetSystemMetrics(int index);
+
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [DllImport("shell32.dll", EntryPoint = "ExtractIconExW", CharSet = CharSet.Unicode)]
+    private static extern int ExtractIconEx(string file, int index, out nint large, out nint small, int count);
+
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [DllImport("kernel32.dll", EntryPoint = "GetModuleHandleW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern nint GetModuleHandle(string? name);
 
     /// <summary>
     /// Paints the system caption buttons to match the window.
